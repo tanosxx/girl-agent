@@ -15,6 +15,7 @@ import { runServer } from "./server.js";
 import { communicationProfileLabel, deriveLegacyVibe, findCommunicationPreset, normalizeCommunicationProfile } from "./presets/communication.js";
 import { findStage } from "./presets/stages.js";
 import type { ProfileConfig, ClientMode, StageId, LLMProto, Nationality, CommunicationProfile, PrivacyMode } from "./types.js";
+import { runMigrations, checkForPendingMigrations } from "./migrations/index.js";
 
 const HELP = `
 girl-agent — AI girl for Telegram
@@ -61,6 +62,10 @@ required flags для headless setup (--name --age --stage --api-preset --mode; 
   --list                      показать профили
   --help
 
+update:
+  npx girl-agent update                # обновить данные (миграции) до текущей версии
+  npx girl-agent update --verbose      # с подробным выводом
+
 команды в работающем дашборде: :status :reset :stage <id|num> :pause :resume :cringe :persona :log :quit
 `;
 
@@ -73,7 +78,7 @@ async function main() {
     ],
     boolean: [
       "help", "list", "reset", "new", "json-events", "headless", "server",
-      "print-config", "print-systemd", "print-docker", "no-start"
+      "print-config", "print-systemd", "print-docker", "no-start", "verbose"
     ],
     alias: { h: "help" }
   });
@@ -88,13 +93,18 @@ async function main() {
     return;
   }
 
+  if (positional[0] === "update") {
+    await runUpdate(!!argv.verbose);
+    return;
+  }
+
   if (argv.help) { process.stdout.write(HELP); return; }
 
   // --- Sanity: TTY/raw-mode detection so terminals that can't render the
   // wizard fail loudly instead of exiting silently after npm warnings.
   // We only require a TTY when we know we'll need to draw the ink wizard or
   // the live dashboard. Headless / --json-events / --list don't need it.
-  const isHeadless = !!(argv["json-events"] || argv.headless || argv.list || argv.help);
+  const isHeadless = !!(argv["json-events"] || argv.headless || argv.list || argv.help || positional[0] === "update");
   if (!isHeadless) {
     const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
     const stdout = process.stdout as NodeJS.WriteStream & { isTTY?: boolean };
@@ -278,6 +288,36 @@ function personaNotesForGeneration(cfg: ProfileConfig): string {
     `Тон общения: ${communicationProfileLabel(normalizeCommunicationProfile(cfg))}. Учти это при speech.md и communication.md.`
   ].filter(Boolean);
   return parts.join("\n\n");
+}
+
+async function runUpdate(verbose: boolean) {
+  const { listProfiles: lp } = await import("./storage/md.js");
+  const profiles = await lp();
+  if (!profiles.length) {
+    process.stdout.write("нет профилей — нечего обновлять.\n");
+    return;
+  }
+
+  process.stdout.write(`найдено профилей: ${profiles.length}\nзапуск миграций...\n`);
+  const result = await runMigrations({ verbose });
+
+  if (!result.migrationsApplied.length) {
+    process.stdout.write("все данные актуальны, миграции не нужны.\n");
+    return;
+  }
+
+  process.stdout.write(`\nготово:\n`);
+  process.stdout.write(`  миграций применено: ${result.migrationsApplied.length}\n`);
+  for (const id of result.migrationsApplied) {
+    process.stdout.write(`    - ${id}\n`);
+  }
+  process.stdout.write(`  профилей обновлено: ${result.profilesUpdated}\n`);
+  if (result.errors.length) {
+    process.stdout.write(`  ошибок: ${result.errors.length}\n`);
+    for (const e of result.errors) {
+      process.stdout.write(`    ${e.profile} @ ${e.migration}: ${e.error}\n`);
+    }
+  }
 }
 
 async function runRuntime(cfg: ProfileConfig, opts: { jsonEvents?: boolean } = {}) {
