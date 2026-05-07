@@ -98,7 +98,6 @@ export function Wizard({ initial, onDone }: {
   const [nightWakeStr, setNightWakeStr] = useState("5");
   const [communicationProfile, setCommunicationProfile] = useState<CommunicationProfile>(normalizeCommunicationProfile(initial));
   const [privacy, setPrivacy] = useState<PrivacyMode>(initial?.privacy ?? "owner-only");
-
   const [stage, setStage] = useState<StageId>(initial?.stage ?? "tg-given-cold");
 
   const [pickedMcp, setPickedMcp] = useState<string[]>(initial?.mcp?.map(m => m.id) ?? []);
@@ -990,7 +989,7 @@ export function Wizard({ initial, onDone }: {
         <Box marginTop={1}>
           <SelectInput
             limit={10}
-            items={STAGE_PRESETS.filter(s => s.id !== "dumped").map(s => ({ label: `${s.label}  ·  ${s.description}`, value: s.id }))}
+            items={STAGE_PRESETS.filter(s => s.id !== "dumped").map(s => ({ label: `${s.num}. ${s.label}  ·  ${s.description}`, value: s.id }))}
             onSelect={async (it) => {
               const nextStage = it.value as StageId;
               setStage(nextStage);

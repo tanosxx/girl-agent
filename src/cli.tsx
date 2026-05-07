@@ -13,6 +13,7 @@ import { pickRandomNames } from "./data/names.js";
 import { runHeadlessJsonEvents } from "./headless.js";
 import { runServer } from "./server.js";
 import { communicationProfileLabel, deriveLegacyVibe, findCommunicationPreset, normalizeCommunicationProfile } from "./presets/communication.js";
+import { findStage } from "./presets/stages.js";
 import type { ProfileConfig, ClientMode, StageId, LLMProto, Nationality, CommunicationProfile, PrivacyMode } from "./types.js";
 
 const HELP = `
@@ -54,13 +55,13 @@ required flags для headless setup (--name --age --stage --api-preset --mode; 
   --privacy=<mode>            owner-only|allow-strangers (по умолчанию owner-only)
   --nationality=RU|UA         (по умолчанию RU)
   --tz=<value>                IANA "Europe/Moscow" / "GMT+3" / "+3" / "Киев" — поиск
-  --stage=<id>                met-irl-got-tg|tg-given-cold|tg-given-warming|convinced|first-date-done|dating-early|dating-stable|long-term
+  --stage=<id|num>            1=met-irl-got-tg 2=tg-given-cold 3=tg-given-warming 4=convinced 5=first-date-done 6=dating-early 7=dating-stable 8=long-term
   --mcp=exa:KEY               можно несколько раз
   --new                       принудительно открыть визард для нового профиля
   --list                      показать профили
   --help
 
-команды в работающем дашборде: :status :reset :stage <id> :pause :resume :cringe :persona :log :quit
+команды в работающем дашборде: :status :reset :stage <id|num> :pause :resume :cringe :persona :log :quit
 `;
 
 async function main() {
@@ -234,7 +235,7 @@ async function buildConfigFromFlags(argv: any): Promise<ProfileConfig> {
     nationality,
     tz,
     mode,
-    stage: argv.stage as StageId,
+    stage: findStage(argv.stage as string).id,
     llm: { presetId, proto, baseURL, apiKey: String(argv["api-key"] ?? preset?.defaultApiKey ?? ""), model },
     telegram: mode === "bot"
       ? { botToken: String(argv.token ?? "") }

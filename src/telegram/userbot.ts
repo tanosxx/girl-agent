@@ -21,13 +21,17 @@ export function makeUserbotAdapter(cfg: ProfileConfig): TgAdapter {
   const apiHash = cfg.telegram.apiHash;
   const session = cfg.telegram.sessionString ?? "";
   if (!apiId || !apiHash) throw new Error("API_ID/API_HASH missing for userbot");
-  debug("[userbot] creating TelegramClient…");
+
+  const useWSS = cfg.telegram.useWSS !== false;
+  debug(`[userbot] creating TelegramClient (useWSS=${useWSS})…`);
+
   const client = new TelegramClient(new StringSession(session), apiId, apiHash, {
     connectionRetries: 5,
     requestRetries: 5,
     retryDelay: 3000,
     autoReconnect: true,
-    floodSleepThreshold: 120
+    floodSleepThreshold: 120,
+    useWSS
   });
   client.onError = async () => { /* swallow _updateLoop ping TIMEOUT noise */ };
   let me: Api.User | null = null;
@@ -186,7 +190,8 @@ export async function userbotLogin(opts: {
   promptPassword: () => Promise<string>;
 }): Promise<string> {
   const client = new TelegramClient(new StringSession(""), opts.apiId, opts.apiHash, {
-    connectionRetries: 5
+    connectionRetries: 5,
+    useWSS: true
   });
   await client.start({
     phoneNumber: async () => opts.phone,

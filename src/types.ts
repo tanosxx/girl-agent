@@ -43,6 +43,7 @@ export type StageId =
 
 export interface StagePreset {
   id: StageId;
+  num: number;
   label: string;
   description: string;
   /** behavioural defaults baked into prompt */
@@ -104,6 +105,8 @@ export interface ProfileConfig {
     apiHash?: string;
     sessionString?: string;
     phone?: string;
+    /** Использовать WebSocket через порт 443 вместо TCP на порту 80. Обходит блокировки РФ. По умолчанию true (auto). */
+    useWSS?: boolean;
   };
   mcp: { id: string; secrets: Record<string, string> }[];
   ownerId?: number; // tg user id of the human (set on first message in practice / fallback)
