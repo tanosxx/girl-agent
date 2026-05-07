@@ -1,7 +1,7 @@
 // Симуляция онлайн-поведения. Каждая девушка имеет свой паттерн заходов в тг.
 // Используется для реалистичных задержек ответа и для решения "она не онлайн прям сейчас".
 
-import type { BusySlot, ProfileConfig, Weekday } from "../types.js";
+import type { BusySlot, CommunicationProfile, ProfileConfig, StageId, Weekday } from "../types.js";
 import type { ConflictState } from "./conflict.js";
 import { normalizeCommunicationProfile } from "../presets/communication.js";
 
@@ -185,6 +185,75 @@ function randomCheckAfter(slot: BusySlot): number {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
+/**
+ * Решает, нужно ли предупредить собеседника об уходе при переходе в busy-слот
+ * посреди активного диалога. Возвращает hint-строку или null если молча уходит.
+ */
+function busyTransitionHint(
+  stage: StageId,
+  comm: CommunicationProfile,
+  remainingMin: number,
+  checkAfterMin: number,
+  recentExchangeCount: number
+): string | null {
+  // --- базовая вероятность по стадии отношений ---
+  const stageChance: Record<StageId, number> = {
+    "met-irl-got-tg": 0.05,
+    "tg-given-cold": 0.08,
+    "tg-given-warming": 0.18,
+    "convinced": 0.40,
+    "first-date-done": 0.55,
+    "dating-early": 0.70,
+    "dating-stable": 0.80,
+    "long-term": 0.75,
+    "dumped": 0.0
+  };
+  let chance = stageChance[stage] ?? 0.3;
+
+  // --- модификатор от стиля общения ---
+  if (comm.initiative === "high") chance += 0.15;
+  else if (comm.initiative === "low") chance -= 0.15;
+
+  if (comm.notifications === "priority") chance += 0.10;
+  else if (comm.notifications === "muted") chance -= 0.10;
+
+  if (comm.lifeSharing === "high") chance += 0.05;
+
+  // --- модификатор от продолжительности занятости ---
+  if (remainingMin <= 10) chance -= 0.20;
+  else if (remainingMin <= 20) chance -= 0.05;
+  else if (remainingMin >= 90) chance += 0.15;
+  else if (remainingMin >= 45) chance += 0.08;
+
+  // --- модификатор от серьёзности занятости ---
+  if (checkAfterMin >= 30) chance += 0.15;
+  else if (checkAfterMin >= 15) chance += 0.05;
+  else if (checkAfterMin <= 8) chance -= 0.10;
+
+  // --- модификатор от интенсивности диалога ---
+  if (recentExchangeCount >= 6) chance += 0.10;
+  else if (recentExchangeCount >= 4) chance += 0.05;
+
+  chance = Math.max(0, Math.min(1, chance));
+  if (Math.random() >= chance) return null;
+
+  // --- стиль предупреждения зависит от стадии и персоны ---
+  const isClose = ["dating-early", "dating-stable", "long-term"].includes(stage);
+  const isWarm = comm.initiative === "high" || comm.lifeSharing === "high";
+  const isCold = comm.initiative === "low" && comm.messageStyle === "one-liners";
+
+  if (isCold) {
+    return `ПЕРЕХОД В ЗАНЯТОСТЬ: у вас был активный диалог, но начинается ${remainingMin > 30 ? "долгое" : "короткое"} дело. Предупреди КРАТКО и сухо, в своём стиле — одно-два слова ("ушла", "потом", "занята"). Не объясняй подробно.`;
+  }
+  if (isClose && isWarm) {
+    return `ПЕРЕХОД В ЗАНЯТОСТЬ: у вас был активный диалог, но начинается занятие. Предупреди его тепло и естественно, в стиле вашей близости (например: "малыш мне надо бежать на ${remainingMin > 45 ? "пару часов" : "немного"}, потом напишу" или "я по делам, скучай"). Стиль зависит от persona.`;
+  }
+  if (isClose) {
+    return `ПЕРЕХОД В ЗАНЯТОСТЬ: у вас был активный диалог, но начинается занятие. Предупреди естественно (например: "мне надо отойти, позже напишу" или "я занята буду ${remainingMin > 45 ? "пару часов" : "немного"}, потом отвечу").`;
+  }
+  return `ПЕРЕХОД В ЗАНЯТОСТЬ: у вас был активный диалог, но начинается дело. Можешь коротко предупредить об уходе (например: "я побежала, потом отвечу" или "мне пора, позже"). Стиль зависит от уровня ваших отношений и persona.`;
+}
+
 export function computePresenceState(
   cfg: ProfileConfig,
   profile: PresenceProfile,
@@ -300,6 +369,10 @@ export function computePresenceState(
       hint = `На ${busy.label} (до ${busy.until}), но скучно — периодически заходишь в Telegram между делом. Можешь быстро ответить, но можешь и пропустить момент.`;
     } else {
       hint = `Сейчас занята: ${busy.label} до ${busy.until}. Не можешь нормально отвечать. После этого зайдёшь проверить Telegram через ${busy.checkAfterMin} мин; сообщение будет прочитано и ответ будет только тогда.`;
+      if (inActiveDialog && busySlot) {
+        const notifyHint = busyTransitionHint(cfg.stage, communication, busySlot.remainingMin, busy.checkAfterMin ?? 15, recentExchangeCount);
+        if (notifyHint) hint += "\n\n" + notifyHint;
+      }
     }
   } else if (online) {
     if (inActiveDialog) {
