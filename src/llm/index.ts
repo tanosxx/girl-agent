@@ -55,6 +55,29 @@ export interface LLMClient {
 const LLM_TIMEOUT_MS = 120_000;
 const LLM_MAX_RETRIES = 1;
 
+let llmQueueTail: Promise<void> = Promise.resolve();
+
+class SerializedLLMClient implements LLMClient {
+  constructor(private inner: LLMClient) {}
+
+  chat(messages: ChatMessage[], opts: LLMOptions = {}): Promise<string> {
+    return runExclusiveLLM(() => this.inner.chat(messages, opts));
+  }
+}
+
+async function runExclusiveLLM<T>(task: () => Promise<T>): Promise<T> {
+  const previous = llmQueueTail.catch(() => undefined);
+  let release = () => {};
+  const current = new Promise<void>(resolve => { release = resolve; });
+  llmQueueTail = previous.then(() => current);
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+  }
+}
+
 class OpenAILike implements LLMClient {
   private client: OpenAI;
   private fetchClient: OpenAI;
@@ -407,5 +430,6 @@ function errorMessage(error: unknown): string {
 }
 
 export function makeLLM(cfg: ProfileConfig["llm"]): LLMClient {
-  return cfg.proto === "anthropic" ? new AnthropicLike(cfg) : new OpenAILike(cfg);
+  const inner = cfg.proto === "anthropic" ? new AnthropicLike(cfg) : new OpenAILike(cfg);
+  return new SerializedLLMClient(inner);
 }

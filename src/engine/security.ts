@@ -24,6 +24,17 @@ export function isTechnicalError(e: unknown): boolean {
 
 export function silentErrorLabel(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e ?? "unknown");
-  if (isTechnicalError(e)) return "llm/provider unavailable";
+  if (isTechnicalError(e)) return `llm/provider unavailable: ${technicalErrorKind(msg)}`;
   return msg.slice(0, 160);
+}
+
+function technicalErrorKind(message: string): string {
+  const msg = message.toLowerCase();
+  if (/401|403|auth|unauthorized|forbidden|apikey|api key|token/.test(msg)) return "auth";
+  if (/quota|balance|billing|insufficient_quota|credit|credits/.test(msg)) return "quota";
+  if (/rate limit|429|too many requests/.test(msg)) return "rate-limit";
+  if (/timeout|etimedout|abort/.test(msg)) return "timeout";
+  if (/econn|enotfound|fetch failed|network/.test(msg)) return "network";
+  if (/overloaded|500|502|503|504|unavailable/.test(msg)) return "provider";
+  return "error";
 }
