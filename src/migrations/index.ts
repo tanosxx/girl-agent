@@ -11,14 +11,30 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ProfileConfig } from "../types.js";
+import type { LLMClient } from "../llm/index.js";
 import { DATA_ROOT, listProfiles, readConfig, writeConfig, profileDir } from "../storage/md.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+export interface MigrationInputField {
+  key: string;
+  label: string;
+  secret?: boolean;
+}
+
+export interface MigrationContext {
+  profilePath: string;
+  config: ProfileConfig;
+  llm?: LLMClient;
+  log: (msg: string) => void;
+}
+
 export interface Migration {
   id: string;
   description: string;
-  migrate(profilePath: string, config: ProfileConfig): Promise<ProfileConfig>;
+  needsLLM?: boolean;
+  needsInput?: MigrationInputField[];
+  migrate(ctx: MigrationContext): Promise<ProfileConfig>;
 }
 
 const MIGRATIONS_FILE = () => path.join(DATA_ROOT, ".migrations.json");
@@ -45,9 +61,11 @@ async function writeMigrationState(state: MigrationState): Promise<void> {
 
 // --- Реестр миграций (добавлять новые сюда в порядке возрастания) ---
 import { migration0112 } from "./0112-add-use-wss-default.js";
+import { migration0113 } from "./0113-ensure-communication-md.js";
 
 export const ALL_MIGRATIONS: Migration[] = [
   migration0112,
+  migration0113,
 ];
 
 /**
@@ -58,27 +76,37 @@ export async function pendingMigrations(): Promise<Migration[]> {
   return ALL_MIGRATIONS.filter(m => !state.appliedMigrations.includes(m.id));
 }
 
+export interface MigrationWarning {
+  migrationId: string;
+  description: string;
+  missingInputs: MigrationInputField[];
+}
+
 export interface UpdateResult {
   profilesUpdated: number;
   migrationsApplied: string[];
+  warnings: MigrationWarning[];
   errors: { profile: string; migration: string; error: string }[];
 }
 
 /**
  * Запуск всех pending-миграций по всем профилям.
  */
-export async function runMigrations(opts?: { verbose?: boolean }): Promise<UpdateResult> {
+export async function runMigrations(opts?: {
+  verbose?: boolean;
+  llmFactory?: (cfg: ProfileConfig) => LLMClient | undefined;
+}): Promise<UpdateResult> {
   const pending = await pendingMigrations();
   const log = opts?.verbose ? (msg: string) => process.stderr.write(msg + "\n") : () => {};
 
   if (pending.length === 0) {
     log("все миграции уже применены, данные актуальны.");
-    return { profilesUpdated: 0, migrationsApplied: [], errors: [] };
+    return { profilesUpdated: 0, migrationsApplied: [], warnings: [], errors: [] };
   }
 
   const profiles = await listProfiles();
   const state = await readMigrationState();
-  const result: UpdateResult = { profilesUpdated: 0, migrationsApplied: [], errors: [] };
+  const result: UpdateResult = { profilesUpdated: 0, migrationsApplied: [], warnings: [], errors: [] };
 
   for (const migration of pending) {
     log(`\n[migration] ${migration.id}: ${migration.description}`);
@@ -91,8 +119,37 @@ export async function runMigrations(opts?: { verbose?: boolean }): Promise<Updat
         continue;
       }
 
+      if (migration.needsInput?.length) {
+        const missing = migration.needsInput.filter(field => {
+          const val = (cfg as unknown as Record<string, unknown>)[field.key];
+          return val === undefined || val === null || val === "";
+        });
+        if (missing.length > 0) {
+          result.warnings.push({
+            migrationId: migration.id,
+            description: migration.description,
+            missingInputs: missing
+          });
+          log(`  ⚠ ${slug}: требуется ввод: ${missing.map(f => f.label).join(", ")}`);
+        }
+      }
+
+      let llm: LLMClient | undefined;
+      if (migration.needsLLM && opts?.llmFactory) {
+        try {
+          llm = opts.llmFactory(cfg);
+        } catch (e) {
+          log(`  ${slug}: не удалось создать LLM: ${(e as Error).message}`);
+        }
+      }
+
       try {
-        const updated = await migration.migrate(profileDir(slug), cfg);
+        const updated = await migration.migrate({
+          profilePath: profileDir(slug),
+          config: cfg,
+          llm,
+          log: (msg: string) => log(`  ${slug}: ${msg}`)
+        });
         await writeConfig(updated);
         profilesAffected++;
         log(`  ${slug}: ок`);
@@ -122,6 +179,18 @@ export async function runMigrations(opts?: { verbose?: boolean }): Promise<Updat
 export async function checkForPendingMigrations(): Promise<boolean> {
   const pending = await pendingMigrations();
   return pending.length > 0;
+}
+
+export function formatUpdateWarnings(warnings: MigrationWarning[]): string {
+  if (!warnings.length) return "";
+  const lines = ["[updater] ⚠ для завершения обновления необходимо:"];
+  for (const w of warnings) {
+    for (const field of w.missingInputs) {
+      const secret = field.secret ? " (секрет)" : "";
+      lines.push(`  • ${field.label}${secret} — требуется для: ${w.description}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 function currentVersion(): string {

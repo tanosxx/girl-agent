@@ -7,16 +7,15 @@
  */
 
 import type { Migration } from "./index.js";
-import type { ProfileConfig } from "../types.js";
 
 export const migration0112: Migration = {
   id: "0112-add-use-wss-default",
   description: "Включить WSS по умолчанию в существующих профилях",
 
-  async migrate(_profilePath: string, config: ProfileConfig): Promise<ProfileConfig> {
-    if (config.telegram.useWSS === undefined || config.telegram.useWSS === false) {
-      config.telegram.useWSS = true;
+  async migrate(ctx): Promise<typeof ctx.config> {
+    if (ctx.config.telegram.useWSS === undefined || ctx.config.telegram.useWSS === false) {
+      ctx.config.telegram.useWSS = true;
     }
-    return config;
+    return ctx.config;
   }
 };

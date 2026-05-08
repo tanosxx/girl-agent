@@ -15,7 +15,7 @@ import { runServer } from "./server.js";
 import { communicationProfileLabel, deriveLegacyVibe, findCommunicationPreset, normalizeCommunicationProfile } from "./presets/communication.js";
 import { findStage } from "./presets/stages.js";
 import type { ProfileConfig, ClientMode, StageId, LLMProto, Nationality, CommunicationProfile, PrivacyMode } from "./types.js";
-import { runMigrations } from "./migrations/index.js";
+import { runMigrations, checkForPendingMigrations, formatUpdateWarnings } from "./migrations/index.js";
 
 const HELP = `
 girl-agent — AI girl for Telegram
@@ -320,6 +320,17 @@ async function runUpdate(verbose: boolean) {
 }
 
 async function runRuntime(cfg: ProfileConfig, opts: { jsonEvents?: boolean } = {}) {
+  if (await checkForPendingMigrations()) {
+    process.stderr.write("[updater] обнаружены pending-миграции, запуск...\n");
+    const result = await runMigrations({
+      verbose: true,
+      llmFactory: (c) => { try { return makeLLM(c.llm); } catch { return undefined; } }
+    });
+    if (result.warnings.length) {
+      process.stderr.write(formatUpdateWarnings(result.warnings) + "\n");
+    }
+  }
+
   const rt = new Runtime(cfg);
   await rt.start();
   if (opts.jsonEvents) {
