@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.15
+
+Дата: 2026-05-08
+
+- Merge pull request #62 from TheSashaDev/devin/1778239329-fix-proactive-memory-and-username
+- fix: proactive messages account for conversation memory + add TG identity to system prompt
+
 ## 0.1.14
 
 Дата: 2026-05-08
