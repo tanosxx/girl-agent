@@ -18,6 +18,8 @@ export interface LLMPreset {
   custom?: boolean;
   hint?: string;
   recommended?: boolean;
+  /** Preset supports OAuth login as alternative to API key */
+  oauth?: boolean;
 }
 
 export interface MCPPreset {
@@ -99,6 +101,10 @@ export interface ProfileConfig {
     baseURL?: string;
     apiKey: string;
     model: string;
+    /** OAuth refresh token (for providers that support OAuth login) */
+    oauthRefreshToken?: string;
+    /** Unix ms when the current access token expires */
+    oauthExpiresAt?: number;
   };
   telegram: {
     botToken?: string;

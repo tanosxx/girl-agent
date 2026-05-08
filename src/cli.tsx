@@ -44,7 +44,7 @@ required flags для headless setup (--name --age --stage --api-preset --mode; 
   --base-url=<url>            для custom
   --proto=openai|anthropic    для custom
   --model=<model>
-  --api-key=<key>             не нужен для локальных LM Studio/Ollama
+  --api-key=<key>             не нужен для локальных LM Studio/Ollama; для GirlAI можно вместо ключа использовать OAuth (только в TUI визарде)
   --name=<имя>                конкретное имя; если пропустить — случайное из пула по nationality (турнир выбора имён доступен ТОЛЬКО в TUI визарде)
   --age=<n>
   --persona-notes=<text>      доп. пожелания к persona/speech/communication перед генерацией

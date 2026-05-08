@@ -9,6 +9,7 @@ export const LLM_PRESETS: LLMPreset[] = [
     defaultModel: "GirlAI-test",
     models: ["GirlAI-test"],
     recommended: true,
+    oauth: true,
     hint: "рекомендуемый · OpenAI-compatible gateway (РФ, оплата)"
   },
   {
