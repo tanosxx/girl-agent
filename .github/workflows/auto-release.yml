@@ -9,6 +9,13 @@ permissions:
   contents: write
   actions: write # для workflow_dispatch других workflows
 
+# --- AI Changelog ---
+# Для красивого changelog нужен токен GitHub с доступом к GitHub Models API.
+# 1. Создайте Personal Access Token (classic) на https://github.com/settings/tokens
+#    или Fine-grained token с permission "Models" → Read
+# 2. Добавьте его в Settings → Secrets → Actions как COPILOT_TOKEN
+# Без токена changelog будет генерироваться из очищенных коммит-сообщений (без мерж-коммитов).
+
 jobs:
   release:
     name: Check for changes and release
@@ -41,6 +48,7 @@ jobs:
           else
             echo "$COMMIT_COUNT new commit(s) since $LAST_TAG"
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
             git log "${LAST_TAG}..HEAD" --pretty=format:'- %s' > /tmp/commits.txt
           fi
 
@@ -52,6 +60,85 @@ jobs:
           NEW_VERSION=$(node -p "require('./package.json').version")
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "Bumped to $NEW_VERSION"
+
+      - name: Generate changelog entry
+        if: steps.check.outputs.has_changes == 'true'
+        env:
+          AI_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+        run: |
+          COMMITS=$(cat /tmp/commits.txt)
+
+          # --- Фолбек: очищенные коммиты без merge/release шума ---
+          generate_fallback() {
+            grep -v -E '^- (Merge pull request|chore\(release\))' /tmp/commits.txt \
+              > /tmp/changelog_entry.txt || true
+            # если после фильтрации ничего не осталось — берём всё
+            if [ ! -s /tmp/changelog_entry.txt ]; then
+              cp /tmp/commits.txt /tmp/changelog_entry.txt
+            fi
+          }
+
+          # Без токена — сразу фолбек
+          if [ -z "$AI_TOKEN" ]; then
+            echo "ℹ️ COPILOT_TOKEN не настроен — используем очищенные коммиты"
+            generate_fallback
+            exit 0
+          fi
+
+          # --- AI-генерация через GitHub Models API ---
+          cat > /tmp/prompt.txt << 'PROMPT_EOF'
+          Ты — автор changelog для open-source проекта "girl-agent" (ИИ-движок для Telegram, имитирующий девушку-собеседницу).
+
+          Из списка сырых git-коммитов сгенерируй красивую секцию changelog. Правила:
+          - Пиши на русском
+          - Группируй по категориям с эмодзи (только те, для которых есть изменения):
+            🚀 Новое
+            🐛 Исправления
+            🔧 Улучшения
+            📝 Документация
+          - Пропускай merge-коммиты ("Merge pull request ...") и chore(release) коммиты
+          - Перепиши каждый пункт человечным, понятным языком
+          - Убери PR-номера, имена веток, технический жаргон (feat:, fix:, refactor: и т.д.)
+          - Каждый пункт — одна строка, начинается с "- "
+          - Объединяй связанные или дублирующиеся изменения в один пункт
+          - НЕ добавляй заголовок версии, дату или вступление — только категории и список
+          - Между категориями ставь пустую строку
+          - Если коммит уже написан понятно — можно оставить как есть, только убери префиксы
+          PROMPT_EOF
+
+          # Добавляем коммиты к промпту
+          printf '\nКоммиты:\n%s' "$COMMITS" >> /tmp/prompt.txt
+
+          PROMPT=$(cat /tmp/prompt.txt)
+
+          # Формируем JSON через jq (безопасное экранирование)
+          JSON_BODY=$(jq -n --arg prompt "$PROMPT" '{
+            model: "gpt-4o-mini",
+            messages: [{role: "user", content: $prompt}],
+            temperature: 0.3,
+            max_tokens: 2000
+          }')
+
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            "https://models.inference.ai.azure.com/chat/completions" \
+            -H "Authorization: Bearer $AI_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$JSON_BODY" 2>/dev/null) || true
+
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+          BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            AI_CHANGELOG=$(echo "$BODY" | jq -r '.choices[0].message.content // empty')
+            if [ -n "$AI_CHANGELOG" ]; then
+              echo "$AI_CHANGELOG" > /tmp/changelog_entry.txt
+              echo "✅ AI changelog сгенерирован"
+              exit 0
+            fi
+          fi
+
+          echo "⚠️ GitHub Models API недоступен (HTTP $HTTP_CODE), используем очищенные коммиты"
+          generate_fallback
 
       - name: Update CHANGELOG.md
         if: steps.check.outputs.has_changes == 'true'
@@ -66,7 +153,7 @@ jobs:
             echo ""
             echo "Дата: ${DATE}"
             echo ""
-            cat /tmp/commits.txt
+            cat /tmp/changelog_entry.txt
             echo ""
             # старый changelog без первой строки "# Changelog"
             tail -n +2 CHANGELOG.md
