@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.18
+
+Дата: 2026-05-09
+
+- chore(ci): switch changelog model to gpt-5-mini
+- feat(ci): AI-powered changelog generation via GitHub Models API
+- Improve profile and model config UX
+
+
 ## 0.1.17
 
 Дата: 2026-05-09
