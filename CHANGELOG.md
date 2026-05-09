@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.17
+
+Дата: 2026-05-09
+
+- Merge pull request #65 from TheSashaDev/devin/1778314838-bug-sweep
+- Harden owner id handling
+- Improve why and wake commands
+- Fix Telegram behavior and setup issues
+
 ## 0.1.16
 
 Дата: 2026-05-08
