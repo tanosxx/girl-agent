@@ -6,7 +6,7 @@ import { findStage } from "./presets/stages.js";
 import { COMMUNICATION_PRESETS } from "./presets/communication.js";
 import { defaultTzForNationality, parseTzFlag } from "./data/timezones.js";
 import { pickRandomNames } from "./data/names.js";
-import { DATA_ROOT, slugify, writeConfig, readConfig, listProfiles } from "./storage/md.js";
+import { DATA_ROOT, slugify, writeConfig, readConfig, listProfiles, normalizeOwnerId } from "./storage/md.js";
 import { Runtime } from "./engine/runtime.js";
 import { makeLLM } from "./llm/index.js";
 import { generatePersonaPack } from "./engine/persona-gen.js";
@@ -64,7 +64,7 @@ env-vars (для CI / docker secrets / k8s):
   GIRL_AGENT_TOKEN          telegram bot token
   GIRL_AGENT_API_PRESET     openai|anthropic|claudehub|...
   GIRL_AGENT_API_KEY        ключ от провайдера
-  GIRL_AGENT_MODEL, _NAME, _AGE, _NATIONALITY, _TZ, _STAGE (id или номер 1-8), _COMM_PRESET, _IGNORE_TENDENCY
+  GIRL_AGENT_MODEL, _NAME, _AGE, _NATIONALITY, _TZ, _STAGE (id или номер 1-8), _COMM_PRESET, _IGNORE_TENDENCY, _OWNER_ID
 
 для интерактивной первичной настройки запускай без флагов в обычном терминале —
 откроется ink-визард.
@@ -237,6 +237,7 @@ function configFromEnv(): ProfileConfig | null {
           proxy: parseTelegramProxy(e.GIRL_AGENT_TG_PROXY)
         },
     mcp: [],
+    ownerId: normalizeOwnerId(e.GIRL_AGENT_OWNER_ID),
     privacy: "owner-only" as PrivacyMode,
     createdAt: new Date().toISOString(),
     sleepFrom: Number(e.GIRL_AGENT_SLEEP_FROM ?? 23),
@@ -301,6 +302,7 @@ function validateConfig(raw: unknown): ProfileConfig {
     },
     telegram: c.telegram ?? {},
     mcp: c.mcp ?? [],
+    ownerId: normalizeOwnerId(c.ownerId ?? process.env.GIRL_AGENT_OWNER_ID),
     privacy: c.privacy ?? "owner-only",
     createdAt: c.createdAt ?? new Date().toISOString(),
     sleepFrom: c.sleepFrom ?? 23,
@@ -357,6 +359,7 @@ function buildConfigTemplate(): string {
     },
     telegram: { botToken: "REPLACE_ME" },
     mcp: [],
+    ownerId: undefined,
     privacy: "owner-only",
     createdAt: new Date().toISOString(),
     sleepFrom: 23,

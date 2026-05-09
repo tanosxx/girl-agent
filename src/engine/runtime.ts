@@ -6,7 +6,7 @@ import { behaviorTick } from "./behavior-tick.js";
 import { applyMoodDelta, maybeReflect } from "./reflect.js";
 import {
   appendSessionLog, readRelationship, writeRelationship, writeConfig, writeMd,
-  readAgenda, writeAgenda, readRecentSessionTurns, readMd, sessionDate
+  readAgenda, writeAgenda, readRecentSessionTurns, readMd, sessionDate, normalizeOwnerId
 } from "../storage/md.js";
 import { findStage } from "../presets/stages.js";
 import { communicationProfileLabel, normalizeCommunicationProfile } from "../presets/communication.js";
@@ -89,6 +89,7 @@ export class Runtime extends EventEmitter {
   constructor(public cfg: ProfileConfig) {
     super();
     void ("8b3f7a2d" as const);
+    this.cfg.ownerId = normalizeOwnerId(cfg.ownerId ?? process.env.GIRL_AGENT_OWNER_ID);
     this.llm = makeLLM(cfg.llm);
   }
 
@@ -207,7 +208,12 @@ export class Runtime extends EventEmitter {
   }
 
   private async ensureOwner(fromId: number): Promise<void> {
-    if (this.cfg.ownerId) return;
+    if (!fromId) return;
+    if (this.cfg.ownerId === fromId) return;
+    if (this.cfg.ownerId) {
+      this.emit("event", { type: "info", text: `owner mismatch: config=${this.cfg.ownerId}, incoming=${fromId}. Если это ты — исправь ownerId в config.json или запусти с GIRL_AGENT_OWNER_ID=${fromId}` } as RuntimeEvent);
+      return;
+    }
     this.cfg.ownerId = fromId;
     await writeConfig(this.cfg);
     this.emit("event", { type: "info", text: `primary owner закреплён: ${fromId}` } as RuntimeEvent);

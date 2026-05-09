@@ -88,7 +88,7 @@ export async function readConfig(slug: string): Promise<ProfileConfig | null> {
 
 export async function writeConfig(cfg: ProfileConfig): Promise<void> {
   await ensureProfile(cfg.slug);
-  const ownerId = normalizeOwnerId(cfg.ownerId);
+  const ownerId = normalizeOwnerId(cfg.ownerId ?? process.env.GIRL_AGENT_OWNER_ID);
   const normalized = ownerId === undefined
     ? { ...cfg, ownerId: undefined, ignoreTendency: normalizeIgnoreTendency(cfg.ignoreTendency) }
     : { ...cfg, ownerId, ignoreTendency: normalizeIgnoreTendency(cfg.ignoreTendency) };
@@ -99,7 +99,7 @@ export async function writeConfig(cfg: ProfileConfig): Promise<void> {
   );
 }
 
-function normalizeOwnerId(value: unknown): number | undefined {
+export function normalizeOwnerId(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
   if (typeof value === "string" && /^\d+$/.test(value.trim())) {
     const parsed = Number(value.trim());
