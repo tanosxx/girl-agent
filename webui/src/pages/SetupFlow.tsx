@@ -273,15 +273,21 @@ export function SetupFlow() {
         {currentStep === "llm" && (
           <>
             <h1 className="setup-title">LLM-провайдер</h1>
-            <p className="setup-subtitle">Это «мозги» девушки. Из РФ работают без VPN: ClaudeHub, GirlAI.</p>
+            <p className="setup-subtitle">Это «мозги» девушки. Из РФ работают без VPN: ClaudeHub.</p>
             <div className="form-row">
               <label>Провайдер</label>
               <select className="select" value={d.llmPresetId} onChange={e => {
                 const p = llmPresets.find(x => x.id === e.target.value);
+                if (!p || p.disabled) return;
                 set("llmPresetId", e.target.value);
-                if (p) { set("llmModel", p.defaultModel); set("llmBaseURL", p.baseURL ?? ""); }
+                set("llmModel", p.defaultModel);
+                set("llmBaseURL", p.baseURL ?? "");
               }}>
-                {llmPresets.map(p => <option key={p.id} value={p.id}>{p.name}{p.recommended ? " ★" : ""}</option>)}
+                {llmPresets.map(p => (
+                  <option key={p.id} value={p.id} disabled={p.disabled}>
+                    {p.name}{p.recommended ? " ★" : ""}{p.disabled ? ` — ${p.disabledReason ?? "недоступен"}` : ""}
+                  </option>
+                ))}
               </select>
               <div className="hint">{llmPresets.find(p => p.id === d.llmPresetId)?.hint}</div>
             </div>

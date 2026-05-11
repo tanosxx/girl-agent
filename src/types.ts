@@ -29,6 +29,10 @@ export interface LLMPreset {
   recommended?: boolean;
   /** Preset supports OAuth login as alternative to API key */
   oauth?: boolean;
+  /** Provider временно недоступен — отображаем в списке как readonly. */
+  disabled?: boolean;
+  /** Причина дизейбла (показывается в UI). */
+  disabledReason?: string;
 }
 
 export interface MCPPreset {

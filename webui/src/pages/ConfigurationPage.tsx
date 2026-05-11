@@ -190,9 +190,13 @@ export function ConfigurationPage() {
             <select className="select" value={merged.llm.presetId} onChange={e => {
               const id = e.target.value;
               const p = llmPresets.find(x => x.id === id);
-              if (p) pf("llm", { presetId: p.id, proto: p.proto, baseURL: p.baseURL, apiKey: merged.llm.apiKey ?? "", model: p.defaultModel });
+              if (p && !p.disabled) pf("llm", { presetId: p.id, proto: p.proto, baseURL: p.baseURL, apiKey: merged.llm.apiKey ?? "", model: p.defaultModel });
             }}>
-              {llmPresets.map(p => <option key={p.id} value={p.id}>{p.name}{p.recommended ? " ★" : ""}</option>)}
+              {llmPresets.map(p => (
+                <option key={p.id} value={p.id} disabled={p.disabled}>
+                  {p.name}{p.recommended ? " ★" : ""}{p.disabled ? ` — ${p.disabledReason ?? "недоступен"}` : ""}
+                </option>
+              ))}
             </select>
             {llmPreset?.hint && <div className="hint">{llmPreset.hint}</div>}
           </div>

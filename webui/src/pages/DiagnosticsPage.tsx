@@ -39,7 +39,7 @@ export function DiagnosticsPage() {
       <div className="card">
         <div className="card-header"><div className="h-title">VPN / прокси</div></div>
         <div className="hint">girl-agent использует WSS (websocket) для Telegram по умолчанию — это обходит большинство блокировок.<br />
-          Если из РФ не подключается к LLM — выберите пресет <strong>ClaudeHub</strong> или <strong>GirlAI</strong>: они работают без VPN.<br />
+          Если из РФ не подключается к LLM — выберите пресет <strong>ClaudeHub</strong>: работает без VPN.<br />
           Если есть свой прокси — укажите в разделе <strong>Конфигурация → Telegram → Прокси</strong>.</div>
       </div>
     </div>
