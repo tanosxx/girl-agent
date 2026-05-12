@@ -31,6 +31,7 @@ my-addon/
     communication.md  # Стиль общения
     ...               # Любые другие файлы
   config.patch.json   # Поля для мёрджа в config.json профиля
+  code.patch          # git diff патч для исходного кода girl-agent
   theme.css           # CSS-стили для WebUI
   install.sh          # Скрипт пост-установки (опционально)
   README.md           # Документация (опционально)
@@ -136,6 +137,68 @@ JSON-объект с полями для глубокого мёрджа в `con
 - `nightWakeChance` — шанс проснуться ночью (0–1)
 - `ignoreTendency` — склонность к игнору (0–100)
 - `communication` — стиль общения (`notifications`, `messageStyle`, `initiative`, `lifeSharing`)
+
+## code.patch — Патч исходного кода
+
+Файл `code.patch` — стандартный `git diff` патч. При установке аддона применяется через `git apply` к корню проекта girl-agent. Используй для фикса багов или модификации внутренней логики.
+
+### Как создать code.patch
+
+1. Склонируй или открой girl-agent
+2. Внеси нужные изменения в исходный код
+3. Создай патч:
+
+```bash
+git diff > code.patch
+```
+
+Или для конкретного файла:
+
+```bash
+git diff src/engine/runtime.ts > code.patch
+```
+
+### Пример: фикс бага в runtime.ts
+
+Допустим, нужно изменить минимальную задержку ответа. Вносишь изменение, делаешь `git diff`:
+
+```diff
+diff --git a/src/engine/runtime.ts b/src/engine/runtime.ts
+index abc1234..def5678 100644
+--- a/src/engine/runtime.ts
++++ b/src/engine/runtime.ts
+@@ -150,7 +150,7 @@ export class Runtime {
+   private async scheduleReply(delay: number) {
+-    const minDelay = 2000;
++    const minDelay = 500;
+     const actual = Math.max(delay, minDelay);
+```
+
+Структура аддона:
+
+```
+fix-fast-reply/
+  manifest.json
+  code.patch
+  README.md
+```
+
+**manifest.json:**
+```json
+{
+  "id": "fix-fast-reply",
+  "name": "Быстрые ответы",
+  "description": "Уменьшает минимальную задержку ответа с 2с до 0.5с",
+  "version": "1.0.0",
+  "tags": ["fix", "speed"],
+  "compatibility": ">=0.1.15"
+}
+```
+
+**Важно:**
+- Патч применяется через `git apply` — проект должен быть git-репозиторием
+- Перед применением проверяется `git apply --check` — если не подходит, патч не применится
+- Патч привязан к конкретной версии кода — используй `compatibility` в manifest для указания версий
 
 ## theme.css — Тема WebUI
 

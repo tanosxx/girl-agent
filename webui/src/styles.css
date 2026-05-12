@@ -560,6 +560,23 @@ a:hover { text-decoration: underline; }
   border-top: 1px solid var(--ga-border);
 }
 
+.gaa-drop-zone {
+  border: 2px dashed var(--ga-border-strong);
+  border-radius: 14px;
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  margin-bottom: 14px;
+  transition: border-color 0.2s, background 0.2s;
+  background: rgba(255,255,255,0.02);
+}
+.gaa-drop-zone:hover, .gaa-drop-zone.drag-over {
+  border-color: var(--ga-accent, #E8412A);
+  background: rgba(232, 65, 42, 0.06);
+}
+.gaa-drop-icon { font-size: 28px; margin-bottom: 6px; }
+.gaa-drop-text { font-size: 13px; color: var(--ga-text-dim); }
+
 /* ==== Empty / loading states ==== */
 
 .empty {

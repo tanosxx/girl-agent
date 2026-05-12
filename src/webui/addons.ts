@@ -215,7 +215,23 @@ export async function installFromDir(
     }
   } catch { /* нет config.patch.json — ок */ }
 
-  // 3. Сохраняем тему (theme.css)
+  // 3. Применяем code.patch (git apply)
+  const codePatchPath = path.join(addonDir, "code.patch");
+  try {
+    const patchContent = await fs.readFile(codePatchPath, "utf8");
+    if (patchContent.trim()) {
+      const projectRoot = path.resolve(import.meta.url.replace("file://", ""), "../../../");
+      try {
+        await execFileAsync("git", ["apply", "--check", codePatchPath], { cwd: projectRoot });
+        await execFileAsync("git", ["apply", codePatchPath], { cwd: projectRoot });
+        applied.push("code.patch применён");
+      } catch (e) {
+        applied.push(`code.patch: ${(e as Error)?.message ?? "ошибка применения"}`);
+      }
+    }
+  } catch { /* нет code.patch — ок */ }
+
+  // 4. Сохраняем тему (theme.css)
   const themePath = path.join(addonDir, "theme.css");
   try {
     const css = await fs.readFile(themePath, "utf8");
@@ -224,7 +240,7 @@ export async function installFromDir(
     applied.push("тема установлена");
   } catch { /* нет theme.css — ок */ }
 
-  // 4. Сохраняем .gaa копию в addons/
+  // 5. Сохраняем .gaa копию в addons/
   const dir = await ensureDir();
   const addonStorePath = path.join(dir, manifest.id);
   await fs.mkdir(addonStorePath, { recursive: true });

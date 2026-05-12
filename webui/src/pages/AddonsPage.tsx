@@ -109,12 +109,30 @@ export function AddonsPage() {
 
       {tab === "marketplace" && (
         <>
+          {/* Загрузка кастомного .gaa */}
+          <div
+            className="gaa-drop-zone"
+            onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("drag-over"); }}
+            onDragLeave={(e) => { e.currentTarget.classList.remove("drag-over"); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.currentTarget.classList.remove("drag-over");
+              const file = e.dataTransfer.files[0];
+              if (file && file.name.endsWith(".gaa")) void installFromFile(file);
+              else toast("Перетащи .gaa файл", "error");
+            }}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <input ref={fileInputRef} type="file" accept=".gaa" style={{ display: "none" }} onChange={handleFileSelect} />
+            <div className="gaa-drop-icon">📦</div>
+            <div className="gaa-drop-text">
+              {installing ? "Устанавливаю…" : "Перетащи .gaa файл сюда или нажми для выбора"}
+            </div>
+          </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
             <input className="input" placeholder="Поиск по названию / тегу / id…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ flex: "1 1 200px" }} />
             <input className="input" placeholder="URL (.gaa или manifest.json)" value={urlInput} onChange={(e) => setUrlInput(e.target.value)} style={{ flex: "1.5 1 280px" }} />
             <button className="btn primary tiny" disabled={installing || !urlInput.trim()} onClick={() => void installFromUrl()}>Из URL</button>
-            <input ref={fileInputRef} type="file" accept=".gaa" style={{ display: "none" }} onChange={handleFileSelect} />
-            <button className="btn primary tiny" disabled={installing} onClick={() => fileInputRef.current?.click()}>Из .gaa файла</button>
           </div>
           {filtered.length === 0 && (
             <div className="empty">
