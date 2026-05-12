@@ -711,8 +711,9 @@ export class Runtime extends EventEmitter {
     const activeDialog = this.lastHerReplyTs.get(key)
       ? Date.now() - (this.lastHerReplyTs.get(key) ?? 0) < 5 * 60 * 1000
       : false;
+    const recentIncomingIds = (this.incomingMsgIds.get(key) ?? []).map(e => ({ messageId: e.messageId, text: e.text }));
     const tick = await behaviorTick(this.llm, this.cfg, hist, incomingText, {
-      presence, conflict, conflictColdActive: coldActive, blockHint, activeDialog
+      presence, conflict, conflictColdActive: coldActive, blockHint, activeDialog, recentIncomingIds
     });
     if (this.incomingSeq.get(key) !== seq) return;
     const baseDecision: DecisionSnapshot = {
@@ -776,16 +777,16 @@ export class Runtime extends EventEmitter {
     // TG-реакция (опционально, до или вместо ответа)
     if (tick.reaction) {
       // Task #3: реакция может быть на любое из последних 10 его сообщений, не только на текущее.
-      const target = this.pickReactionTarget(this.histKey(m.chatId), m.messageId, tick.reactionTargetOffset ?? 0);
+      const target = this.pickReactionTarget(this.histKey(m.chatId), m.messageId, tick.reactionTargetMessageId);
       const reactDelay = Math.min(tick.delaySec, 30) * 1000 * (tick.shouldReply ? 0.3 : 1);
       setTimeout(async () => {
         if (this.userbotActionAvailable("readHistory")) {
           await this.tg.readHistory?.(m.chatId).catch(() => {});
         }
         await this.tg.setReaction(m.chatId, target.messageId, tick.reaction!).catch(() => {});
-        const offsetTag = target.offset > 0 ? ` (offset=${target.offset})` : "";
-        this.emit("event", { type: "info", text: `реакция ${tick.reaction}${offsetTag} на "${target.text.slice(0, 40)}"` } as RuntimeEvent);
-        appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> reaction ${tick.reaction}${offsetTag}`).catch(() => {});
+        const msgTag = target.messageId !== m.messageId ? ` (msgId=${target.messageId})` : "";
+        this.emit("event", { type: "info", text: `реакция ${tick.reaction}${msgTag} на "${target.text.slice(0, 40)}"` } as RuntimeEvent);
+        appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> reaction ${tick.reaction}${msgTag}`).catch(() => {});
       }, reactDelay).unref?.();
     }
 
@@ -1498,20 +1499,16 @@ export class Runtime extends EventEmitter {
   }
 
   /**
-   * Выбирает messageId, на который ставим реакцию. По умолчанию (offset=0) — текущее.
-   * Если LLM попросил offset 1..9 — берём более ранее из последних 10.
-   * Безопасный fallback на текущее сообщение если буфер пуст.
+   * Выбирает messageId, на который ставим реакцию.
+   * LLM возвращает конкретный TG message ID. Fallback на текущее сообщение если ID не найден в буфере.
    */
-  private pickReactionTarget(key: string, currentMessageId: number, offset: number): { messageId: number; offset: number; text: string } {
+  private pickReactionTarget(key: string, currentMessageId: number, targetMessageId?: number): { messageId: number; text: string } {
     const arr = this.incomingMsgIds.get(key) ?? [];
-    if (offset <= 0 || arr.length === 0) {
-      return { messageId: currentMessageId, offset: 0, text: arr[arr.length - 1]?.text ?? "" };
+    if (targetMessageId != null) {
+      const found = arr.find(e => e.messageId === targetMessageId);
+      if (found) return { messageId: found.messageId, text: found.text };
     }
-    // arr — хронологически: первое = самое старое, последнее = текущее.
-    const idx = Math.max(0, arr.length - 1 - offset);
-    const target = arr[idx];
-    if (!target) return { messageId: currentMessageId, offset: 0, text: "" };
-    return { messageId: target.messageId, offset: arr.length - 1 - idx, text: target.text };
+    return { messageId: currentMessageId, text: arr[arr.length - 1]?.text ?? "" };
   }
 
   // ============================================================================

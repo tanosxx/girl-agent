@@ -14,6 +14,8 @@ interface BehaviorContext {
   conflictColdActive?: boolean;
   blockHint?: string; // что она сейчас делает по daily-life
   activeDialog?: boolean;
+  /** Последние входящие сообщения с их TG message ID — для реакций. */
+  recentIncomingIds?: Array<{ messageId: number; text: string }>;
 }
 
 function reactionMenu(stage: string, score: { attraction: number; interest: number; annoyance: number; cringe: number }): string {
@@ -50,6 +52,12 @@ function reactionMenu(stage: string, score: { attraction: number; interest: numb
 Не ставь ❤/🥰 пока стадия не warming или выше — это палево, рано ещё.`;
 }
 
+function formatIncomingIds(ids: Array<{ messageId: number; text: string }> | undefined): string {
+  if (!ids || ids.length === 0) return "";
+  const lines = ids.map(m => `  id=${m.messageId}: "${m.text.slice(0, 60)}"`);
+  return `\nПоследние его сообщения (для reactionTargetMessageId):\n${lines.join("\n")}`;
+}
+
 const TEMPLATE = (state: string, history: string, incoming: string, ctx: BehaviorContext, reactionsHint: string) => `Состояние:
 ${state}
 ${ctx.presence ? `\nПрисутствие: ${ctx.presence.online ? "онлайн" : "офлайн"}${ctx.presence.asleep ? ", СПИТ" : ""}${ctx.presence.nightAwake ? ", НОЧНОЕ ПРОБУЖДЕНИЕ (заспанная, коротко)" : ""} (локально ${ctx.presence.localHour}:00). ${ctx.presence.hint}` : ""}
@@ -64,6 +72,7 @@ ${history}
 """${incoming}"""
 
 ${reactionsHint}
+${formatIncomingIds(ctx.recentIncomingIds)}
 
 Реши и верни СТРОГО JSON:
 {
@@ -74,7 +83,7 @@ ${reactionsHint}
   "bubbles": число (1..6),
   "typing": boolean,
   "reaction": "" или ОДИН эмодзи из доступного списка выше. Не из запрещённого!,
-  "reactionTargetOffset": число 0..9. 0 = реагируешь на САМОЕ НОВОЕ его сообщение (по умолчанию), 1 = предыдущее его, ... до 9. Девушки в тг иногда реагируют на более раннее сообщение в бурсте — например он рассказал две вещи, она вернулась позже и поставила реакцию на первое. Чаще всего 0; не используй без reaction.,
+  "reactionTargetMessageId": ID сообщения из списка ниже, на которое ставишь реакцию. Девушки в тг иногда реагируют на более раннее сообщение в бурсте — например он рассказал две вещи, она вернулась позже и поставила реакцию на первое. Не используй без reaction.,
   "ignoreReason": строка или "",
   "moodDelta": { "interest": число, "trust": число, "attraction": число, "annoyance": число, "cringe": число }
 }
@@ -207,11 +216,10 @@ export async function behaviorTick(
     if (reaction) {
       reaction = sanitizeReaction(reaction, cfg.stage, rel.score);
     }
-    const reactionTargetOffset = Math.min(9, Math.max(0,
-      typeof parsed.reactionTargetOffset === "number" && Number.isFinite(parsed.reactionTargetOffset)
-        ? Math.floor(parsed.reactionTargetOffset)
-        : 0
-    ));
+    const reactionTargetMessageId: number | undefined =
+      typeof parsed.reactionTargetMessageId === "number" && Number.isFinite(parsed.reactionTargetMessageId)
+        ? Math.floor(parsed.reactionTargetMessageId)
+        : undefined;
 
     let intent = parsed.intent || "reply";
     let shouldReply = !!parsed.shouldReply && intent !== "ignore" && intent !== "left-on-read" && intent !== "reaction-only";
@@ -238,7 +246,7 @@ export async function behaviorTick(
       moodDelta: parsed.moodDelta || {},
       intent,
       reaction,
-      reactionTargetOffset: reaction ? reactionTargetOffset : 0
+      reactionTargetMessageId: reaction ? reactionTargetMessageId : undefined
     };
   } catch {
     const ignore = Math.random() < stage.defaults.ignoreChance * ignoreMul;
