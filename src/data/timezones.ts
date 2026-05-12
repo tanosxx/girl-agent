@@ -34,7 +34,7 @@ export const TIMEZONES: TzEntry[] = [
   { iana: "Asia/Dushanbe", gmtWinter: "GMT+5", city: "Душанбе", country: "Таджикистан", aliases: ["душанбе", "dushanbe", "tj", "таджикистан"], group: "CIS" },
   { iana: "Asia/Bishkek", gmtWinter: "GMT+6", city: "Бишкек", country: "Кыргызстан", aliases: ["бишкек", "bishkek", "kg", "кыргызстан"], group: "CIS" },
 
-  // === Россия — в самом конце ===
+  // === Россия ===
   { iana: "Europe/Kaliningrad", gmtWinter: "GMT+2", city: "Калининград", country: "Россия", aliases: ["калининград", "kaliningrad", "rus"], group: "RU" },
   { iana: "Europe/Moscow", gmtWinter: "GMT+3", city: "Москва", country: "Россия", aliases: ["москва", "msk", "moscow", "питер", "санкт-петербург", "spb", "rus"], group: "RU" },
   { iana: "Europe/Samara", gmtWinter: "GMT+4", city: "Самара", country: "Россия", aliases: ["самара", "samara", "ижевск"], group: "RU" },
