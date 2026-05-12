@@ -92,8 +92,8 @@ const defaultDraft = (): DraftState => ({
 // Шаги. Любые шаги, перечисленные тут, идут в порядке. tg-userbot-code появляется
 // динамически, когда пользователь ввёл телефон — добавляем в "advanced" режим
 // только если он реально нужен.
-const SIMPLE_STEPS = ["mode", "tg", "tg-userbot-code", "llm", "persona", "ready"] as const;
-const ADV_STEPS = ["mode", "name", "tg", "tg-userbot-code", "llm", "stage", "comm", "sleep", "owner", "tz", "persona", "ready"] as const;
+const SIMPLE_STEPS = ["mode", "tg", "tg-userbot-code", "llm", "persona", "ready", "generating"] as const;
+const ADV_STEPS = ["mode", "name", "tg", "tg-userbot-code", "llm", "api-config", "stage", "comm", "sleep", "owner", "tz", "persona", "ready", "generating"] as const;
 
 export function SetupFlow() {
   const showSetupFlow = useStore(s => s.showSetupFlow);
@@ -155,7 +155,11 @@ export function SetupFlow() {
   // Динамически собираем список шагов: tg-userbot-code включаем только если режим userbot.
   const stepIds = useMemo(() => {
     const list = (d.mode === "advanced" ? ADV_STEPS : SIMPLE_STEPS) as readonly string[];
-    return list.filter(s => s !== "tg-userbot-code" || (d.tgMode === "userbot" && !d.sessionString));
+    return list.filter(s => {
+      if (s === "tg-userbot-code") return d.tgMode === "userbot" && !d.sessionString;
+      if (s === "api-config") return d.mode === "advanced";
+      return true;
+    });
   }, [d.mode, d.tgMode, d.sessionString]);
 
   const totalSteps = stepIds.length;
@@ -372,12 +376,12 @@ export function SetupFlow() {
     }
   }
 
-  async function finish() {
+  async function startGeneration() {
     const cfg = await createProfile();
     if (!cfg) return;
     await refreshProfiles();
     await selectProfile(cfg.slug);
-    // Всегда генерируем персону — это ключевой шаг
+    // Переходим на шаг «generating» и запускаем генерацию
     await generatePersona(cfg.slug);
     try {
       await api.applyProfile(cfg.slug);
@@ -385,13 +389,25 @@ export function SetupFlow() {
     } catch (e) {
       toast(`Запуск не удался — проверь токены: ${(e as Error)?.message}`, "error");
     }
+  }
+
+  function finishAndClose() {
     showSetupFlow(false);
     setTab("logs");
   }
 
   function next() {
-    if (d.step < totalSteps - 1) set("step", d.step + 1);
-    else void finish();
+    if (d.step < totalSteps - 1) {
+      const nextStep = stepIds[d.step + 1];
+      if (nextStep === "generating") {
+        set("step", d.step + 1);
+        void startGeneration();
+      } else {
+        set("step", d.step + 1);
+      }
+    } else {
+      finishAndClose();
+    }
   }
 
   function back() {
@@ -676,6 +692,41 @@ export function SetupFlow() {
           </>
         )}
 
+        {currentStep === "api-config" && (
+          <>
+            <h1 className="setup-title">Настройка API</h1>
+            <p className="setup-subtitle">Детальная настройка подключения к {llmPresets.find(p => p.id === d.llmPresetId)?.name ?? d.llmPresetId}.</p>
+            <div className="form-row">
+              <label>Модель</label>
+              {(() => {
+                const p = llmPresets.find(x => x.id === d.llmPresetId);
+                return p?.models?.length
+                  ? <select className="select" value={d.llmModel} onChange={e => set("llmModel", e.target.value)}>{p.models.map(m => <option key={m} value={m}>{m}</option>)}</select>
+                  : <input className="input" value={d.llmModel} onChange={e => set("llmModel", e.target.value)} placeholder="claude-sonnet-4.6, gpt-4o, и т.д." />;
+              })()}
+            </div>
+            <div className="form-row">
+              <label>API Key</label>
+              <input className="input" type="password" value={d.llmApiKey} onChange={e => set("llmApiKey", e.target.value)} placeholder="sk-..." />
+              <div className="hint">Ключ от провайдера. ClaudeHub — не нужен.</div>
+            </div>
+            <div className="form-row">
+              <label>Base URL</label>
+              <input className="input" value={d.llmBaseURL} onChange={e => set("llmBaseURL", e.target.value)} placeholder={llmPresets.find(p => p.id === d.llmPresetId)?.baseURL ?? "https://api.openai.com/v1"} />
+              <div className="hint">URL API-эндпоинта. Пустое = по умолчанию для провайдера.</div>
+            </div>
+            <div className="form-row">
+              <label>Протокол</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <div className={`provider-card ${(llmPresets.find(p => p.id === d.llmPresetId)?.proto ?? "openai") === "openai" ? "active" : ""}`} style={{ flex: 1, cursor: "default" }}>
+                  <div className="p-name">{llmPresets.find(p => p.id === d.llmPresetId)?.proto ?? "openai"}</div>
+                  <div className="p-hint">Определяется провайдером</div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
         {currentStep === "stage" && (
           <>
             <h1 className="setup-title">Стадия отношений</h1>
@@ -810,6 +861,19 @@ export function SetupFlow() {
 
         {currentStep === "ready" && (
           <>
+            <h1 className="setup-title">Всё готово</h1>
+            <p className="setup-subtitle">Проверь настройки. На следующем шаге создадим профиль и сгенерируем персону через LLM.</p>
+            <div className="form-row">
+              <div><strong>{d.name}</strong>, {d.age}, {d.nationality}, {d.tz}</div>
+              <div><strong>TG:</strong> {d.tgMode === "bot" ? `bot (token ${d.botToken ? "ok" : "missing"})` : `userbot (${d.sessionString ? "session ok" : d.apiId ? "creds ok, no session" : "missing"})`}</div>
+              <div><strong>LLM:</strong> {d.llmPresetId} / {d.llmModel}</div>
+              <div><strong>Стадия:</strong> {stages.find(s => s.id === d.stage)?.label}</div>
+            </div>
+          </>
+        )}
+
+        {currentStep === "generating" && (
+          <>
             {d.generating ? (
               <>
                 <h1 className="setup-title">Генерация персоны…</h1>
@@ -822,7 +886,7 @@ export function SetupFlow() {
             ) : d.generated ? (
               <>
                 <h1 className="setup-title">Персона создана</h1>
-                <p className="setup-subtitle">Профиль готов и рантайм запущен.</p>
+                <p className="setup-subtitle">Профиль готов и рантайм запущен. Нажми «Готово» чтобы перейти к логам.</p>
                 <div className="form-row">
                   <div><strong>{d.name}</strong>, {d.age}, {d.nationality}, {d.tz}</div>
                   <div><strong>LLM:</strong> {d.llmPresetId} / {d.llmModel}</div>
@@ -832,13 +896,10 @@ export function SetupFlow() {
               </>
             ) : (
               <>
-                <h1 className="setup-title">Всё готово</h1>
-                <p className="setup-subtitle">Создаю профиль, генерирую персону через LLM и запускаю рантайм.</p>
-                <div className="form-row">
-                  <div><strong>{d.name}</strong>, {d.age}, {d.nationality}, {d.tz}</div>
-                  <div><strong>TG:</strong> {d.tgMode === "bot" ? `bot (token ${d.botToken ? "ok" : "missing"})` : `userbot (${d.sessionString ? "session ok" : d.apiId ? "creds ok, no session" : "missing"})`}</div>
-                  <div><strong>LLM:</strong> {d.llmPresetId} / {d.llmModel}</div>
-                  <div><strong>Стадия:</strong> {stages.find(s => s.id === d.stage)?.label}</div>
+                <h1 className="setup-title">Создаю профиль…</h1>
+                <p className="setup-subtitle">Подготавливаю данные для генерации.</p>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, padding: "32px 0" }}>
+                  <div className="spinner" />
                 </div>
               </>
             )}
@@ -847,12 +908,18 @@ export function SetupFlow() {
 
         <div style={{ display: "flex", gap: 8, marginTop: 24, justifyContent: "space-between" }}>
           <div>
-            {d.step > 0 && <button className="btn ghost" onClick={back}>← Назад</button>}
-            <button className="btn ghost" onClick={() => showSetupFlow(false)}>Закрыть</button>
+            {d.step > 0 && currentStep !== "generating" && <button className="btn ghost" onClick={back}>← Назад</button>}
+            {currentStep !== "generating" && <button className="btn ghost" onClick={() => showSetupFlow(false)}>Закрыть</button>}
           </div>
-          <button className="btn primary" disabled={!canNext || savingProfile || d.generating} onClick={() => void next()}>
-            {d.step === totalSteps - 1 ? (savingProfile ? "Создаю..." : d.generating ? "Генерирую персону..." : "Готово") : "Далее →"}
-          </button>
+          {currentStep === "generating" ? (
+            <button className="btn primary" disabled={!d.generated} onClick={() => finishAndClose()}>
+              {d.generating ? "Генерирую персону…" : d.generated ? "Готово →" : "Подождите…"}
+            </button>
+          ) : (
+            <button className="btn primary" disabled={!canNext || savingProfile} onClick={() => void next()}>
+              {currentStep === "ready" ? (savingProfile ? "Создаю…" : "Создать и сгенерировать →") : "Далее →"}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -881,6 +948,8 @@ function stepValid(step: string, d: DraftState): boolean {
       // Шаг пройден только если получили sessionString
       return !!d.sessionString;
     case "llm": return !!d.llmPresetId && !!d.llmModel;
+    case "api-config": return true;
+    case "generating": return d.generated;
     case "stage": return !!d.stage;
     case "comm": return !!d.communicationId;
     case "sleep": return true;
