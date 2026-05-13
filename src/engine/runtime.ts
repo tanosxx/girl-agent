@@ -22,6 +22,7 @@ import {
 } from "./conflict.js";
 import { closeCurrentSession, closeStaleSessions } from "./daily-summarizer.js";
 import { loadRealismContext, maybeAdvanceRelationshipTimeline, recordInteractionMemory } from "./realism.js";
+import { mineUnminedDailyLogs } from "./memory-palace.js";
 import { describeIncomingMedia, imagePartFromMedia } from "./media.js";
 import { looksLikeJailbreak, sanitizeModelReply, silentErrorLabel } from "./security.js";
 import { addStickerToLibrary, pickSticker } from "./stickers.js";
@@ -537,6 +538,8 @@ export class Runtime extends EventEmitter {
     // Сводки за прошлые дни
     const made = await closeStaleSessions(this.llm, this.cfg);
     if (made > 0) this.emit("event", { type: "info", text: `daily summaries: +${made}` } as RuntimeEvent);
+    const mined = await mineUnminedDailyLogs(this.llm, this.cfg, 2).catch(() => 0);
+    if (mined > 0) this.emit("event", { type: "info", text: `memory palace drawers: +${mined}` } as RuntimeEvent);
   }
 
   /**
