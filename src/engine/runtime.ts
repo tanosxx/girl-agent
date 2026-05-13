@@ -806,6 +806,7 @@ export class Runtime extends EventEmitter {
       }
       this.emit("event", { type: "ignored", text: incomingText, reason: tick.ignoreReason ?? tick.intent } as RuntimeEvent);
       await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> ignored (${tick.intent}: ${tick.ignoreReason ?? ""})`);
+      recordInteractionMemory(this.llm, this.cfg, incomingText).catch(() => {});
       return;
     }
 

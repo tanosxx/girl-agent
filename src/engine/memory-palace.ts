@@ -1,6 +1,7 @@
 import type { LLMClient } from "../llm/index.js";
 import type { ProfileConfig } from "../types.js";
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   appendMd,
@@ -147,6 +148,10 @@ function scoreClamp(value: unknown): number {
 
 function safeId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function stableId(source: string, quote: string): string {
+  return createHash("sha1").update(`${source}\n${quote}`).digest("hex").slice(0, 16);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -384,7 +389,7 @@ export function memoryPalacePromptFragment(ctx: MemoryPalaceContext): string {
 async function appendDrawer(cfg: ProfileConfig, source: string, parsed: ParsedMemoryDrawer): Promise<void> {
   const stamp = nowStamp();
   const drawer: MemoryDrawer = {
-    id: safeId(),
+    id: stableId(source, parsed.quote),
     ts: stamp,
     wing: wingFor(cfg),
     room: parsed.room,
@@ -394,6 +399,8 @@ async function appendDrawer(cfg: ProfileConfig, source: string, parsed: ParsedMe
     keywords: parsed.keywords,
     salience: parsed.salience
   };
+  const existing = await readMd(cfg.slug, drawerPath(drawer));
+  if (existing.trim()) return;
   await writeMd(cfg.slug, drawerPath(drawer), renderDrawer(drawer));
   await appendCompatibilityMemory(cfg, drawer);
 }
