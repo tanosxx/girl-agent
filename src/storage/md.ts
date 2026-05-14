@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, accessSync, constants } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { ProfileConfig, RelationshipScore } from "../types.js";
@@ -18,9 +18,20 @@ export const DATA_ROOT = process.env.GIRL_AGENT_DATA
   ? path.resolve(process.env.GIRL_AGENT_DATA)
   : defaultDataRoot();
 
+function canWriteDir(dir: string): boolean {
+  try {
+    existsSync(dir) || mkdirSync(dir, { recursive: true });
+    accessSync(dir, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function defaultDataRoot(): string {
   const cwd = process.cwd();
-  if (looksLikeProjectRoot(cwd)) return path.resolve(cwd, "data");
+  const projectData = path.resolve(cwd, "data");
+  if (looksLikeProjectRoot(cwd) && canWriteDir(path.dirname(projectData))) return projectData;
   // Issue #72: на Windows храним в %APPDATA%\\girl-agent\\data — это ожидаемое
   // место для конфига npm-приложений, при отсутствии XDG.
   if (process.platform === "win32") {
@@ -164,6 +175,7 @@ export interface StoredConversationTurn {
   role: "user" | "assistant";
   content: string;
   ts?: number;
+  fromId?: number;
 }
 
 const SCORE_RE = /<!--score:(.+?)-->/;
@@ -232,9 +244,36 @@ export function sessionDate(tz: string, now = new Date()): string {
 }
 
 /** Аппенд в session-aware дневник. Используй вместо appendDayLog. */
-export async function appendSessionLog(slug: string, tz: string, line: string): Promise<void> {
+export async function appendSessionLog(slug: string, tz: string, line: string, fromId?: number): Promise<void> {
   const day = sessionDate(tz);
-  await appendMd(slug, `log/${day}.md`, line + "\n");
+  const suffix = fromId ? ` <!--from:${fromId}-->` : "";
+  await appendMd(slug, `log/${day}.md`, line + suffix + "\n");
+}
+
+export async function appendSharedMemory(slug: string, tz: string, fromId: number, text: string): Promise<void> {
+  const day = sessionDate(tz);
+  const safe = text.replace(/\s+/g, " ").trim();
+  if (!safe) return;
+  const line = `- ${new Date().toISOString()} user:${fromId} day:${day}: ${safe}`;
+  const raw = await readMd(slug, "memory/shared-cross-chat.md");
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  if (lines.slice(-20).some(existing => existing.endsWith(`: ${safe}`))) return;
+  await writeMd(slug, "memory/shared-cross-chat.md", [...lines.slice(-500), line].join("\n") + "\n");
+}
+
+export async function readSharedMemory(slug: string, limit = 40): Promise<string> {
+  const raw = await readMd(slug, "memory/shared-cross-chat.md");
+  return raw.split(/\r?\n/).filter(Boolean).slice(-limit).join("\n");
+}
+
+export async function searchSharedMemory(slug: string, query: string, limit = 8): Promise<string> {
+  const raw = await readMd(slug, "memory/shared-cross-chat.md");
+  const tokens = query.toLowerCase().split(/\s+/).filter(t => t.length >= 3);
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  const hits = tokens.length
+    ? lines.filter(line => tokens.some(t => line.toLowerCase().includes(t)))
+    : [];
+  return (hits.length ? hits : lines).slice(-limit).join("\n");
 }
 
 /** Список всех session-дней в порядке возрастания */
@@ -307,7 +346,7 @@ export function parseSessionLogTurns(raw: string, fromId?: number, limit = 30): 
     if (user) {
       currentChatMatches = fromId == null || Number(user[2]) === fromId;
       if (currentChatMatches) {
-        turns.push({ role: "user", content: user[3] ?? "", ts: Date.parse(user[1] ?? "") || undefined });
+        turns.push({ role: "user", content: user[3] ?? "", ts: Date.parse(user[1] ?? "") || undefined, fromId: Number(user[2]) });
       }
       continue;
     }

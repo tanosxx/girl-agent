@@ -12,7 +12,7 @@ export interface ProfileConfig {
   mode: "bot" | "userbot"; stage: string;
   llm: { presetId: string; proto: "openai" | "anthropic"; baseURL?: string; apiKey: string; model: string; oauthRefreshToken?: string; oauthExpiresAt?: number };
   telegram: { botToken?: string; apiId?: number; apiHash?: string; sessionString?: string; phone?: string; useWSS?: boolean; proxy?: string };
-  mcp: { id: string; secrets: Record<string, string> }[];
+  mcp?: { id: string; secrets: Record<string, string> }[];
   ownerId?: number;
   privacy?: "owner-only" | "allow-strangers";
   createdAt: string;
@@ -75,6 +75,12 @@ export interface InstalledAddon {
   installedFiles?: string[];
 }
 
+export class AuthRequiredError extends Error {
+  constructor() {
+    super("auth required");
+  }
+}
+
 const BASE = ((): string => {
   if (typeof window === "undefined") return "";
   // dev: vite proxies /api to backend
@@ -97,12 +103,22 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   try { data = await res.json(); } catch { /* may be empty */ }
   if (!res.ok) {
     const msg = (data as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`;
+    if (res.status === 401 && msg === "auth required") throw new AuthRequiredError();
     throw new ApiError(res.status, msg, data);
   }
   return data as T;
 }
 
 export const api = {
+  async authStatus() {
+    return req<{ enabled: boolean }>("GET", "/api/auth/status");
+  },
+  async login(password: string) {
+    return req<{ ok: true }>("POST", "/api/auth/login", { password });
+  },
+  async logout() {
+    return req<{ ok: true }>("POST", "/api/auth/logout");
+  },
   async listProfiles() {
     return req<{ profiles: ProfileSummary[]; dataRoot: string }>("GET", "/api/profiles");
   },
@@ -168,7 +184,6 @@ export const api = {
   async listLLMPresets() { return req<{ presets: LLMPreset[] }>("GET", "/api/presets/llm"); },
   async listStages() { return req<{ stages: StagePreset[] }>("GET", "/api/presets/stages"); },
   async listCommunicationPresets() { return req<{ presets: CommunicationPreset[] }>("GET", "/api/presets/communication"); },
-  async listMCPPresets() { return req<{ presets: { id: string; name: string; description: string; ready: boolean; secrets: { key: string; label: string }[] }[] }>("GET", "/api/presets/mcp"); },
   async listTimezones(q = "") { return req<{ zones: { iana: string; gmtWinter: string; city: string; country: string; aliases: string[]; group?: "UA" | "CIS" | "RU" }[] }>("GET", `/api/presets/timezones?q=${encodeURIComponent(q)}`); },
   async pickNames(nationality: "RU" | "UA", count = 12) { return req<{ names: string[] }>("GET", `/api/presets/names?nationality=${nationality}&count=${count}`); },
 
@@ -214,7 +229,7 @@ export const api = {
     );
   },
   async tgVerifyPassword(payload: { password: string; loginToken?: string; sessionId?: string }) {
-    return req<{ sessionString: string; apiId: number; apiHash: string }>(
+    return req<{ sessionString: string; apiId?: number; apiHash?: string }>(
       "POST", "/api/tg/userbot/verify-password", payload
     );
   }

@@ -17,6 +17,10 @@ import { searchPalaceDrawers } from "./memory-palace.js";
  *   3. handleResponseToProactive — когда юзер отвечает на её proactive ping, LLM решает «принято / отстань / поговорим»
  */
 
+function agendaById(items: AgendaItem[]): Map<string, AgendaItem> {
+  return new Map(items.map(item => [item.id, item]));
+}
+
 const SYS_EXTRACT = `Ты — модуль ассистента-девушки. Твоя задача: после каждого сообщения парня посмотреть, не упомянул ли он что-то про своё будущее (планы, события, дела, дедлайны, работу, соревнования, экзамены, поездки), на что ОНА бы переживала / хотела узнать / отметила про себя — как живой человек, не календарь. Также понять, есть ли у НЕЁ повод проактивно написать ему позже (без явного триггера от него).
 
 ВАЖНО:
@@ -273,6 +277,7 @@ export async function extractAgendaUpdates(
   }
 
   let created = 0, updated = 0, cancelled = 0;
+  const byId = agendaById(agenda);
   for (const a of actions) {
     if (a.action === "noop" || !a.action) continue;
     if (a.action === "create" && a.about && a.pingAt) {
@@ -292,21 +297,21 @@ export async function extractAgendaUpdates(
       agenda.push(item);
       created++;
     } else if (a.action === "update" && a.id) {
-      const idx = agenda.findIndex(x => x.id === a.id);
-      if (idx >= 0) {
-        if (a.about) agenda[idx]!.about = a.about;
-        if (a.pingAt) agenda[idx]!.pingAt = a.pingAt;
-        if (a.reason) agenda[idx]!.reason = a.reason;
-        if (a.userEventTime) agenda[idx]!.userEventTime = a.userEventTime;
-        if (a.importance) agenda[idx]!.importance = a.importance;
-        agenda[idx]!.history = [...(agenda[idx]!.history ?? []), `updated at ${new Date().toISOString()}: ${a.reason ?? ""}`];
+      const item = byId.get(a.id);
+      if (item) {
+        if (a.about) item.about = a.about;
+        if (a.pingAt) item.pingAt = a.pingAt;
+        if (a.reason) item.reason = a.reason;
+        if (a.userEventTime) item.userEventTime = a.userEventTime;
+        if (a.importance) item.importance = a.importance;
+        item.history = [...(item.history ?? []), `updated at ${new Date().toISOString()}: ${a.reason ?? ""}`];
         updated++;
       }
     } else if (a.action === "cancel" && a.id) {
-      const idx = agenda.findIndex(x => x.id === a.id);
-      if (idx >= 0) {
-        agenda[idx]!.state = "cancelled";
-        agenda[idx]!.history = [...(agenda[idx]!.history ?? []), `cancelled at ${new Date().toISOString()}: ${a.reason ?? ""}`];
+      const item = byId.get(a.id);
+      if (item) {
+        item.state = "cancelled";
+        item.history = [...(item.history ?? []), `cancelled at ${new Date().toISOString()}: ${a.reason ?? ""}`];
         cancelled++;
       }
     }
@@ -422,18 +427,15 @@ export async function reconcileAgendaAfterConflict(
   const now = Date.now();
 
   for (const item of pending) {
-    const idx = agenda.findIndex(x => x.id === item.id);
-    if (idx < 0) continue;
-
     if (conflict.level >= 3 || item.importance === 1) {
-      agenda[idx]!.state = "cancelled";
-      agenda[idx]!.history = [...(agenda[idx]!.history ?? []), `cancelled due to conflict level ${conflict.level} at ${new Date().toISOString()}`];
+      item.state = "cancelled";
+      item.history = [...(item.history ?? []), `cancelled due to conflict level ${conflict.level} at ${new Date().toISOString()}`];
       cancelled++;
     } else if (conflict.level >= 2 && item.importance === 2) {
       const delayHours = 12 + Math.random() * 24;
       const newPing = new Date(now + delayHours * 3600_000).toISOString();
-      agenda[idx]!.pingAt = newPing;
-      agenda[idx]!.history = [...(agenda[idx]!.history ?? []), `rescheduled due to conflict level ${conflict.level} at ${new Date().toISOString()}`];
+      item.pingAt = newPing;
+      item.history = [...(item.history ?? []), `rescheduled due to conflict level ${conflict.level} at ${new Date().toISOString()}`];
       rescheduled++;
     }
   }
@@ -453,22 +455,22 @@ export async function dueAgendaItems(slug: string): Promise<AgendaItem[]> {
 
 export async function markAgendaFired(slug: string, id: string): Promise<void> {
   const agenda = await readAgenda(slug);
-  const idx = agenda.findIndex(x => x.id === id);
-  if (idx >= 0) {
-    agenda[idx]!.state = "fired";
-    agenda[idx]!.attempts += 1;
-    agenda[idx]!.history = [...(agenda[idx]!.history ?? []), `fired at ${new Date().toISOString()}`];
+  const item = agendaById(agenda).get(id);
+  if (item) {
+    item.state = "fired";
+    item.attempts += 1;
+    item.history = [...(item.history ?? []), `fired at ${new Date().toISOString()}`];
     await writeAgenda(slug, agenda);
   }
 }
 
 export async function rescheduleAgenda(slug: string, id: string, newPingAt: string, note: string): Promise<void> {
   const agenda = await readAgenda(slug);
-  const idx = agenda.findIndex(x => x.id === id);
-  if (idx >= 0) {
-    agenda[idx]!.pingAt = newPingAt;
-    agenda[idx]!.state = "pending";
-    agenda[idx]!.history = [...(agenda[idx]!.history ?? []), `rescheduled to ${newPingAt}: ${note}`];
+  const item = agendaById(agenda).get(id);
+  if (item) {
+    item.pingAt = newPingAt;
+    item.state = "pending";
+    item.history = [...(item.history ?? []), `rescheduled to ${newPingAt}: ${note}`];
     await writeAgenda(slug, agenda);
   }
 }

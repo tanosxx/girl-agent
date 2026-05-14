@@ -45,6 +45,8 @@ export async function pickSticker(cfg: ProfileConfig, mood = ""): Promise<Sticke
 
 export async function addStickerToLibrary(cfg: ProfileConfig, fileId: string, emoji = "", tags: string[] = []): Promise<void> {
   await libraryPath(cfg);
+  const existing = await listStickers(cfg);
+  if (existing.some(s => s.fileId === fileId)) return;
   const p = path.join(profileDir(cfg.slug), "stickers/library.md");
   await fs.appendFile(p, `${fileId} | ${emoji} | ${tags.join(",")}\n`, "utf8");
 }

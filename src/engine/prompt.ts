@@ -1,5 +1,5 @@
 import type { ProfileConfig } from "../types.js";
-import { searchDailySummaries, readMd, readRelationship } from "../storage/md.js";
+import { readSharedMemory, searchDailySummaries, searchSharedMemory, readMd, readRelationship } from "../storage/md.js";
 import { computeHormones, hormonesMd } from "./hormones.js";
 import { computePresenceProfile } from "./presence.js";
 import { dailyLifePromptFragment, type DailyLife } from "./daily-life.js";
@@ -120,6 +120,8 @@ const ANTI_AI_RULES = `# КРИТИЧЕСКИ ВАЖНО — РОЛЬ
 
 # ПАМЯТЬ
 - Используй long-term memory только если факт ТАМ записан. Иначе — не помнишь.
+- Кросс-чатовая память — только для безопасных базовых фактов о других людях и факта контакта. Не раскрывай интимные детали, секреты, токены, адреса, документы, переписки слово-в-слово.
+- Если основной парень спрашивает, писал ли тебе кто-то странный/другой, можешь вспомнить общий факт из cross-chat memory без дословных цитат и без лишней приватности.
 - На раннем этапе ты ещё ничего о нём не знаешь. Не делай вид что знаешь.
 
 # РИТМ И ДЛИНА (как реально пишут девушки в тг)
@@ -210,6 +212,9 @@ export async function buildSystemPrompt(cfg: ProfileConfig, ctx: BuildPromptCtx 
     ? { ...relRaw, stage: effectiveStageId, score: { interest: 0, trust: 0, attraction: 0, annoyance: 0, cringe: 0 } }
     : relRaw;
   const longTerm = isAcquaintance ? "" : await readMd(cfg.slug, "memory/long-term.md");
+  const sharedMemory = isAcquaintance
+    ? await readSharedMemory(cfg.slug, 8)
+    : ctx.incoming ? await searchSharedMemory(cfg.slug, ctx.incoming, 12) : await readSharedMemory(cfg.slug, 20);
   const stage = findStage(effectiveStageId);
   const seed = [...cfg.name].reduce((a, c) => a + c.charCodeAt(0), 0);
   // Стресс-нагрузка от отношений (0..1): высокий annoyance/cringe + конфликт = задержка цикла + рост кортизола
@@ -263,7 +268,7 @@ ${hits.map(h => `- ${h.day}: ${h.excerpt}`).join("\n")}
 
   const relationshipBoundary = isAcquaintance
     ? `# ЭТО НЕ ОСНОВНОЙ ПАРЕНЬ
-Ты сейчас переписываешься не с основным парнем из relationship/memory. Не используй память, чувства, шутки, обещания и историю отношений с ним.
+Ты сейчас переписываешься не с основным парнем из relationship/memory. Не используй память, чувства, шутки, обещания и историю отношений с ним. Его обычные сообщения можно запоминать только как базовую cross-chat память: кто писал, общий тон, безопасные явные факты. Не запоминай и не пересказывай интимное/секретное/личные данные.
 ${ctx.committedPrimary ? `У тебя уже есть парень. На флирт, подкаты, ревность, "давай встречаться", романтические или интимные вопросы ставь границу естественно: "у меня есть парень", "я не знакомлюсь", "не флиртую". Без лекций.` : `С этим человеком нет общей истории. Можно отвечать по легенде на обычные вопросы, но не ускоряй близость и не изображай уже существующие отношения.`}
 ${ctx.romanticApproach ? `Последнее сообщение выглядит как романтический/флиртующий заход. Ответ должен поставить личную границу, коротко и по-человечески.` : `Если вопрос обычный — ответь как ${cfg.name} по своей легенде, без переноса отношений.`}`
     : "";

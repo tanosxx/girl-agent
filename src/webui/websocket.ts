@@ -2,6 +2,7 @@ import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { bus, type BufferedEvent, type RuntimeStatus } from "./runtime-bus.js";
 import { readRelationship } from "../storage/md.js";
+import { isAuthorized } from "./auth.js";
 
 /**
  * WS-эндпоинты согласно §6.2 ТЗ.
@@ -13,6 +14,10 @@ export function attachWebSockets(server: http.Server): void {
   const wssStatus = new WebSocketServer({ noServer: true });
 
   server.on("upgrade", (req, socket, head) => {
+    if (!isAuthorized(req)) {
+      socket.destroy();
+      return;
+    }
     const url = req.url ?? "";
     const logsMatch = url.match(/^\/ws\/logs\/([^/?#]+)/);
     if (logsMatch) {

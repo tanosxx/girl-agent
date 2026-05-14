@@ -25,21 +25,21 @@ const MIME: Record<string, string> = {
 let cachedRoot: string | null = null;
 
 /**
- * Найти dist/webui/ относительно текущего исполняемого файла.
- * Поддерживает как dev-режим (tsx из src/), так и собранный (dist/cli.js).
+ * Найти собранный отдельный React/Vite WebUI из корневой папки webui/.
  */
 async function findWebUIRoot(): Promise<string | null> {
   if (cachedRoot) return cachedRoot;
   const here = (() => {
     try { return path.dirname(fileURLToPath(import.meta.url)); } catch { return process.cwd(); }
   })();
-  // Порядок важен: prod-сборка должна найтись первой, потом dev-fallback.
   const candidates = [
-    path.resolve(here, "webui"),                            // dist/cli.js -> dist/webui/
-    path.resolve(here, "..", "dist", "webui"),              // src/webui/static.ts -> dist/webui/
-    path.resolve(here, "..", "..", "dist", "webui"),        // src/webui/static.ts -> dist/webui/
+    path.resolve(process.cwd(), "dist", "webui"),
+    path.resolve(process.cwd(), "webui", "dist"),
+    path.resolve(here, "webui"),
+    path.resolve(here, "..", "dist", "webui"),
+    path.resolve(here, "..", "..", "dist", "webui"),
     path.resolve(here, "..", "..", "..", "dist", "webui"),
-    path.resolve(process.cwd(), "dist", "webui")
+    path.resolve(here, "..", "..", "webui", "dist")
   ];
   for (const c of candidates) {
     try {

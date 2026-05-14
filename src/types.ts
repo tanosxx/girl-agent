@@ -9,7 +9,9 @@ export type Nationality = "RU" | "UA";
 export interface TelegramProxyConfig {
   ip: string;
   port: number;
-  socksType: 4 | 5;
+  socksType?: 4 | 5;
+  MTProxy?: true;
+  secret?: string;
   username?: string;
   password?: string;
   timeout?: number;
@@ -130,7 +132,8 @@ export interface ProfileConfig {
     /** SOCKS proxy for MTProto userbot mode. Можно задать через GIRL_AGENT_TG_PROXY=socks5://user:pass@host:port. */
     proxy?: TelegramProxyConfig;
   };
-  mcp: { id: string; secrets: Record<string, string> }[];
+  /** @deprecated MCP настройки скрыты из UI; внешние расширения ставятся через addons. */
+  mcp?: { id: string; secrets: Record<string, string> }[];
   ownerId?: number; // tg user id of the human (set on first message in practice / fallback)
   privacy?: PrivacyMode;
   createdAt: string;

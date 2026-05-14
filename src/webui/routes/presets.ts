@@ -2,7 +2,6 @@ import { Router } from "../http.js";
 import { LLM_PRESETS, findPreset } from "../../presets/llm.js";
 import { STAGE_PRESETS } from "../../presets/stages.js";
 import { COMMUNICATION_PRESETS } from "../../presets/communication.js";
-import { MCP_PRESETS } from "../../presets/mcp.js";
 import { TIMEZONES, findTzByQuery } from "../../data/timezones.js";
 import { pickRandomNames } from "../../data/names.js";
 import type { Nationality } from "../../types.js";
@@ -40,13 +39,6 @@ export function registerPresetRoutes(r: Router): void {
   r.get("/api/presets/communication", () => ({
     presets: COMMUNICATION_PRESETS.map(p => ({
       id: p.id, label: p.label, description: p.description, profile: p.profile
-    }))
-  }));
-
-  r.get("/api/presets/mcp", () => ({
-    presets: MCP_PRESETS.map(p => ({
-      id: p.id, name: p.name, description: p.description, ready: p.ready,
-      secrets: p.secrets ?? []
     }))
   }));
 

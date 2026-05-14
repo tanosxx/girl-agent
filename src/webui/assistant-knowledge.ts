@@ -1,6 +1,5 @@
 import { COMMUNICATION_PRESETS } from "../presets/communication.js";
 import { LLM_PRESETS } from "../presets/llm.js";
-import { MCP_PRESETS } from "../presets/mcp.js";
 import { STAGE_PRESETS } from "../presets/stages.js";
 
 export interface KnowledgeArticle {
@@ -38,7 +37,7 @@ const CORE_KNOWLEDGE_BASE: KnowledgeArticle[] = [
     subcategory: "project-structure",
     title: "Карта директорий",
     keywords: ["директории", "файлы", "структура", "src", "engine", "webui", "telegram", "storage"],
-    body: "src/engine — ядро поведения: runtime, presence, behavior-tick, prompt, memory-palace, conflict, agenda, daily-life. src/telegram — bot/userbot adapters. src/llm — клиенты провайдеров. src/storage/md.ts — файловое хранилище профилей. src/webui — HTTP API, runtime bus, routes. webui/src — React страницы. src/presets — stages, llm, communication, mcp."
+    body: "src/engine — ядро поведения: runtime, presence, behavior-tick, prompt, memory-palace, conflict, agenda, daily-life. src/telegram — bot/userbot adapters. src/llm — клиенты провайдеров. src/storage/md.ts — файловое хранилище профилей. src/webui — HTTP API, runtime bus, routes. webui/src — React страницы. src/presets — stages, llm, communication."
   },
   {
     category: "overview",
@@ -80,7 +79,7 @@ const CORE_KNOWLEDGE_BASE: KnowledgeArticle[] = [
     subcategory: "profile-config",
     title: "ProfileConfig",
     keywords: ["ProfileConfig", "config", "slug", "name", "age", "nationality", "tz", "mode"],
-    body: "ProfileConfig включает slug, name, age, nationality RU/UA, timezone, mode bot/userbot, stage, llm, telegram, mcp, ownerId, privacy, sleepFrom/sleepTo, nightWakeChance, ignoreTendency, vibe, communication, personaNotes и busySchedule. При чтении storage нормализует ownerId, communication и ignoreTendency."
+    body: "ProfileConfig включает slug, name, age, nationality RU/UA, timezone, mode bot/userbot, stage, llm, telegram, ownerId, privacy, sleepFrom/sleepTo, nightWakeChance, ignoreTendency, vibe, communication, personaNotes, addons и busySchedule. При чтении storage нормализует ownerId, communication и ignoreTendency."
   },
   {
     category: "config",
@@ -440,13 +439,6 @@ const CORE_KNOWLEDGE_BASE: KnowledgeArticle[] = [
     body: "Manifest требует id/name/description/version. Дополнительно: author, compatibility semver range, tags, dependencies, settings, icon, homepage. Settings поддерживают string/number/boolean/select с default/options/required."
   },
   {
-    category: "mcp",
-    subcategory: "client",
-    title: "MCP servers",
-    keywords: ["mcp", "tools", "stdio", "exa", "spotify", "instagram", "weather", "calendar"],
-    body: "startMcpServers читает cfg.mcp, находит preset, запускает stdio transport, подключает MCP Client и получает listTools. Сейчас готов Exa Search через npx -y exa-mcp-server и EXA_API_KEY; spotify/instagram/weather/calendar помечены soon."
-  },
-  {
     category: "migrations",
     subcategory: "data-migrations",
     title: "Миграции данных",
@@ -493,11 +485,11 @@ function generatedKnowledge(): KnowledgeArticle[] {
       body: LLM_PRESETS.map(p => `${p.id}: ${p.name}, proto=${p.proto}, default=${p.defaultModel || "custom"}${p.baseURL ? `, baseURL=${p.baseURL}` : ""}${p.disabled ? `, disabled=${p.disabledReason ?? "yes"}` : ""}${p.hint ? `, hint=${p.hint}` : ""}`).join("\n")
     },
     {
-      category: "mcp",
-      subcategory: "preset-index",
-      title: "Индекс MCP presets",
-      keywords: ["mcp", "preset", "интеграции", ...MCP_PRESETS.map(p => p.id)],
-      body: MCP_PRESETS.map(p => `${p.id}: ${p.name}, ready=${p.ready ? "yes" : "soon"} — ${p.description}`).join("\n")
+      category: "addons",
+      subcategory: "integration-index",
+      title: "Аддоны вместо MCP",
+      keywords: ["addons", "аддоны", "интеграции", "gaa", "mcp"],
+      body: "Внешние расширения теперь показываются как аддоны. MCP-пресеты не выводятся отдельной системой в WebUI; интеграции ставятся через Marketplace/.gaa и могут менять config.patch.json, файлы профиля, тему или code.patch."
     }
   ];
 }

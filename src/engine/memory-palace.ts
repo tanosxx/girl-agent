@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   appendMd,
+  appendSharedMemory,
   listDailySummaries,
   listSessionDays,
   profileDir,
@@ -440,13 +441,15 @@ async function appendCompatibilityMemory(cfg: ProfileConfig, drawer: MemoryDrawe
   }
 }
 
-export async function recordInteractionMemory(llm: LLMClient, cfg: ProfileConfig, incoming: string, reply?: string): Promise<void> {
+export async function recordInteractionMemory(llm: LLMClient, cfg: ProfileConfig, incoming: string, reply?: string, fromId?: number, scope: "primary" | "acquaintance" = "primary"): Promise<void> {
   if (!incoming.trim()) return;
   await ensureDefaults(cfg);
   const raw = await llm.chat([
     {
       role: "system",
-      content: `Ты извлекаешь память для Telegram-персоны. Принцип MemPalace: сохранять оригинальные формулировки дословно, не пересказывать и не сжимать. Нужны только явные факты, предпочтения, обещания, открытые петли, эмоциональные эпизоды и сомнительные факты. Если важна целая фраза — сохрани её целиком без обрезки ни одного слова. Не выдумывай.`
+      content: scope === "acquaintance"
+        ? `Ты извлекаешь кросс-чатовую память о стороннем Telegram-собеседнике. Нужны только безопасные базовые факты: кто писал, общий тон, явные неинтимные факты, странное/опасное поведение. НЕЛЬЗЯ сохранять секреты, адреса, документы, интим, токены, контакты, дословные длинные цитаты. Пиши кратко и обобщённо.`
+        : `Ты извлекаешь память для Telegram-персоны. Принцип MemPalace: сохранять оригинальные формулировки дословно, не пересказывать и не сжимать. Нужны только явные факты, предпочтения, обещания, открытые петли, эмоциональные эпизоды и сомнительные факты. Если важна целая фраза — сохрани её целиком без обрезки ни одного слова. Не выдумывай.`
     },
     {
       role: "user",
@@ -476,7 +479,14 @@ ${reply ?? ""}
     }
   ], { temperature: 0.1, maxTokens: 3500, json: true });
   const parsed = parseJsonObject(raw);
-  const drawers = parsedDrawers(parsed?.drawers).slice(0, 12);
+  const drawers = parsedDrawers(parsed?.drawers).slice(0, scope === "acquaintance" ? 4 : 12);
+  if (scope === "acquaintance") {
+    if (!fromId) return;
+    for (const drawer of drawers) {
+      await appendSharedMemory(cfg.slug, cfg.tz, fromId, drawer.quote);
+    }
+    return;
+  }
   for (const drawer of drawers) {
     await appendDrawer(cfg, "interaction", drawer);
   }

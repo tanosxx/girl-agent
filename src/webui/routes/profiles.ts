@@ -7,7 +7,7 @@ import {
 import type { ProfileConfig } from "../../types.js";
 import { bus } from "../runtime-bus.js";
 import { findStage } from "../../presets/stages.js";
-import { generatePersonaPack } from "../../engine/persona-gen.js";
+import { ensurePersonaPack, generatePersonaPack } from "../../engine/persona-gen.js";
 import { makeLLM } from "../../llm/index.js";
 import { applyLLMUpdate, describeLLM } from "../../config/llm-update.js";
 import { findPreset } from "../../presets/llm.js";
@@ -100,7 +100,6 @@ export function registerProfileRoutes(r: Router): void {
       stage: data.stage ?? "tg-given-cold",
       llm: data.llm ?? { presetId: "claudehub", proto: "anthropic", apiKey: "", model: "claude-sonnet-4.6" },
       telegram: data.telegram ?? {},
-      mcp: data.mcp ?? [],
       privacy: data.privacy ?? "owner-only",
       ownerId: normalizeOwnerId(data.ownerId),
       createdAt: new Date().toISOString(),
@@ -313,15 +312,20 @@ export function registerProfileRoutes(r: Router): void {
     const cfg = await readConfig(slug);
     if (!cfg) throw new HttpError(404, "profile not found");
     const data = (body as { name?: string; age?: number; nationality?: "RU" | "UA"; notes?: string }) ?? {};
-    const llm = makeLLM(cfg.llm);
-    const generated = await generatePersonaPack(
-      llm,
-      cfg.slug,
-      data.name ?? cfg.name,
-      data.age ?? cfg.age,
-      data.nationality ?? cfg.nationality,
-      data.notes ?? cfg.personaNotes
-    );
+    let generated;
+    try {
+      const llm = makeLLM(cfg.llm);
+      generated = await generatePersonaPack(
+        llm,
+        cfg.slug,
+        data.name ?? cfg.name,
+        data.age ?? cfg.age,
+        data.nationality ?? cfg.nationality,
+        data.notes ?? cfg.personaNotes
+      );
+    } catch {
+      generated = await ensurePersonaPack(cfg.slug, data.name ?? cfg.name, data.age ?? cfg.age);
+    }
     cfg.busySchedule = generated.busySchedule;
     await writeConfig(cfg);
     return { ok: true, busySchedule: generated.busySchedule };

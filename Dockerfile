@@ -1,14 +1,14 @@
 # girl-agent — multi-arch (amd64, arm64) container.
 #
 # Usage:
-#   docker run -it --rm -v girl-agent-data:/data ghcr.io/thesashadev/girl-agent:latest
+#   docker run -it --rm -p 3000:3000 -v girl-agent-data:/data ghcr.io/thesashadev/girl-agent:latest
 #   docker run -d --name girl-agent --restart=unless-stopped \
 #     -v girl-agent-data:/data \
 #     -e GIRL_AGENT_DATA=/data \
 #     -e GIRL_AGENT_MODE=bot \
 #     -e GIRL_AGENT_TOKEN=... \
 #     ghcr.io/thesashadev/girl-agent:latest \
-#     server --headless
+#     server --headless --config /data/bot.json
 
 # ---- build stage ----
 FROM node:22-alpine AS build
@@ -38,12 +38,14 @@ RUN apk add --no-cache --virtual .build-deps python3 make g++ \
     && npm cache clean --force \
     && apk del .build-deps
 
-COPY --from=build /app/dist ./dist
+COPY --from=build --chown=app:app /app/dist ./dist
 
 # Profiles live in /data (volume-mountable).
 RUN mkdir -p /data && chown -R app:app /data /home/app
 ENV GIRL_AGENT_DATA=/data
+ENV GIRL_AGENT_HOST=0.0.0.0
 VOLUME ["/data"]
+EXPOSE 3000
 
 USER app
 ENTRYPOINT ["node", "/home/app/dist/cli.js"]

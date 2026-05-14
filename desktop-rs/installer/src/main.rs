@@ -27,7 +27,7 @@ use rand::Rng;
 use crate::config::{NameMode, UserbotAuthSource, WizardData};
 use crate::data::{find_llm_preset, pick_random_name, search_tz, default_tz_for_nationality, NAMES_RU, NAMES_UA};
 use crate::install::{InstallProgress, InstallStage};
-use crate::ui::{InstallOutcome, Msg, Step, TgAuthSuccess, TgVerifyOutcome};
+use crate::ui::{InstallOutcome, Msg, PasteTarget, Step, TgAuthSuccess, TgVerifyOutcome};
 
 fn main() -> iced::Result {
     install_panic_hook();
@@ -68,15 +68,33 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Msg> {
+        let mut subs = Vec::new();
+
         if self.model.installing {
-            iced::time::every(Duration::from_millis(80)).map(|_| Msg::InstallProgressTick(InstallProgress {
+            subs.push(iced::time::every(Duration::from_millis(80)).map(|_| Msg::InstallProgressTick(InstallProgress {
                 stage: InstallStage::Start,
                 fraction: -1.0,
                 note: String::new(),
-            }))
-        } else {
-            Subscription::none()
+            })));
         }
+
+        subs.push(iced::keyboard::on_key_press(|key, modifiers| {
+            use iced::keyboard;
+            let is_v = match key {
+                keyboard::Key::Character(c) => {
+                    let c = c.as_str();
+                    c == "v" || c == "V" || c == "м" || c == "М"
+                }
+                _ => false,
+            };
+            if (modifiers.command() || modifiers.control()) && is_v {
+                Some(Msg::GlobalPaste)
+            } else {
+                None
+            }
+        }));
+
+        Subscription::batch(subs)
     }
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
@@ -364,6 +382,23 @@ impl App {
                     None => return Task::none(),
                 };
                 paste_into(&mut self.model.data, &mut self.model.tz_query, target, value);
+                Task::none()
+            }
+            Msg::GlobalPaste => {
+                let target = match self.model.step {
+                    Step::TgBotToken => Some(PasteTarget::TgToken),
+                    Step::TgUserbotApi => None,
+                    Step::TgUserbotPhone => Some(PasteTarget::TgPhone),
+                    Step::TgUserbotCode => Some(PasteTarget::TgCode),
+                    Step::TgUserbot2Fa => Some(PasteTarget::Tg2Fa),
+                    Step::LlmConfig => None,
+                    Step::Persona => Some(PasteTarget::TzQuery),
+                    Step::Notes => Some(PasteTarget::Notes),
+                    _ => None,
+                };
+                if let Some(target) = target {
+                    return iced::clipboard::read().map(move |s| Msg::PasteContent(target, s));
+                }
                 Task::none()
             }
 

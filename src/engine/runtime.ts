@@ -5,13 +5,12 @@ import { buildSystemPrompt, type ConversationTurn, type RelationshipScope } from
 import { behaviorTick } from "./behavior-tick.js";
 import { applyMoodDelta, maybeReflect } from "./reflect.js";
 import {
-  appendSessionLog, readRelationship, writeRelationship, writeConfig, writeMd,
+  appendSessionLog, appendSharedMemory, readRelationship, writeRelationship, writeConfig, writeMd,
   readAgenda, writeAgenda, readRecentSessionTurns, readMd, sessionDate, normalizeOwnerId, profileDir
 } from "../storage/md.js";
 import { findStage } from "../presets/stages.js";
 import { communicationProfileLabel, normalizeCommunicationProfile } from "../presets/communication.js";
 import { findPreset } from "../presets/llm.js";
-import { startMcpServers, type McpHandle } from "../mcp/client.js";
 import { extractAgendaUpdates, dueAgendaItems, markAgendaFired, decideAfterProactiveResponse, ensureAutonomousAgenda, rescheduleAgenda, reconcileAgendaAfterConflict } from "./agenda.js";
 import { computePresenceProfile, computePresenceState, type PresenceProfile } from "./presence.js";
 import { decideOnlineHeartbeat } from "./online-tick.js";
@@ -23,7 +22,7 @@ import {
 import { closeCurrentSession, closeStaleSessions } from "./daily-summarizer.js";
 import { loadRealismContext, maybeAdvanceRelationshipTimeline, recordInteractionMemory } from "./realism.js";
 import { mineUnminedDailyLogs } from "./memory-palace.js";
-import { describeIncomingMedia, imagePartFromMedia } from "./media.js";
+import { describeIncomingMedia, imagePartFromMedia, memeDetectionInstruction } from "./media.js";
 import { looksLikeJailbreak, sanitizeModelReply, silentErrorLabel } from "./security.js";
 import { addStickerToLibrary, pickSticker } from "./stickers.js";
 import { EventEmitter } from "node:events";
@@ -68,7 +67,6 @@ interface DecisionSnapshot {
 export class Runtime extends EventEmitter {
   private llm: LLMClient;
   private tg!: TgAdapter;
-  private mcps: McpHandle[] = [];
   private histories = new Map<string, ConversationTurn[]>();
   private paused = false;
   private agendaTimer?: NodeJS.Timeout;
@@ -117,8 +115,6 @@ export class Runtime extends EventEmitter {
 
   async start(): Promise<void> {
     this.presenceProfile = computePresenceProfile(this.cfg);
-    this.mcps = await startMcpServers(this.cfg);
-    this.emit("event", { type: "info", text: `MCP started: ${this.mcps.map(m => m.id).join(", ") || "none"}` } as RuntimeEvent);
     this.tg = await makeTgAdapter(this.cfg);
     await this.tg.start((m) => this.handleIncoming(m));
     if (this.tg.getSelf) this.tgSelf = this.tg.getSelf();
@@ -160,7 +156,6 @@ export class Runtime extends EventEmitter {
       this.emit("event", { type: "error", text: "daily summary: " + (e as Error).message } as RuntimeEvent);
     }
     try { await this.tg?.stop(); } catch {}
-    for (const h of this.mcps) await h.close();
   }
 
   pause() { this.paused = true; }
@@ -239,7 +234,6 @@ export class Runtime extends EventEmitter {
     if (!fromId) return;
     if (this.cfg.ownerId === fromId) return;
     if (this.cfg.ownerId) {
-      this.emit("event", { type: "info", text: `owner mismatch: config=${this.cfg.ownerId}, incoming=${fromId}. Если это ты — исправь ownerId в config.json или запусти с GIRL_AGENT_OWNER_ID=${fromId}` } as RuntimeEvent);
       return;
     }
     this.cfg.ownerId = fromId;
@@ -325,6 +319,13 @@ export class Runtime extends EventEmitter {
     return m.text ? `${media}\n${m.text}` : media;
   }
 
+  private async rememberSharedCrossChat(fromId: number, incomingText: string): Promise<void> {
+    const text = incomingText.trim();
+    if (!text || text.length < 3) return;
+    const safe = text.replace(/\s+/g, " ").slice(0, 280);
+    await appendSharedMemory(this.cfg.slug, this.cfg.tz, fromId, safe).catch(() => {});
+  }
+
   private requestedOutgoingMedia(text: string): "photo" | "video" | "voice" | "video_note" | undefined {
     if (/\b(фото|фотку|селфи|скинь себя|покажи себя)\b/i.test(text)) return "photo";
     if (/\b(видео|видос|запиши видео)\b/i.test(text)) return "video";
@@ -379,9 +380,7 @@ export class Runtime extends EventEmitter {
             try {
               await this.tg.editText!(chatId, messageId, rawText);
               this.emit("event", { type: "info", text: `edit-self: "${text.slice(0, 30)}" → "${rawText.slice(0, 30)}"`, chatId } as RuntimeEvent);
-              if (scope === "primary") {
-                await appendSessionLog(this.cfg.slug, this.cfg.tz, `  ~ edit "${text.slice(0, 40)}" → "${rawText.slice(0, 40)}"`).catch(() => {});
-              }
+              await appendSessionLog(this.cfg.slug, this.cfg.tz, `  ~ edit "${text.slice(0, 40)}" → "${rawText.slice(0, 40)}"`, typeof chatId === "number" ? chatId : undefined).catch(() => {});
               // Обновляем буфер sentMessages и history.
               const rec = this.sentMessages.find(s => s.messageId === messageId);
               if (rec) rec.text = rawText;
@@ -397,7 +396,7 @@ export class Runtime extends EventEmitter {
       this.lastHerReplyTs.set(this.histKey(chatId), Date.now());
       this.bumpStageStats("her");
       this.emit("event", { type: "outgoing", text, chatId } as RuntimeEvent);
-      if (scope === "primary") await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> она: ${text}`);
+      await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> она: ${text}`, typeof chatId === "number" ? chatId : undefined);
       sent.push(text);
     }
     return sent;
@@ -407,7 +406,7 @@ export class Runtime extends EventEmitter {
     if (this.userbotActionAvailable("readHistory")) await this.tg.readHistory?.(chatId).catch(() => {});
     this.setDecisionStatus(this.histKey(chatId), "fallback", "LLM не дал безопасный ответ");
     this.emit("event", { type: "ignored", text: hist[hist.length - 1]?.content ?? "", reason: reasonTag } as RuntimeEvent);
-    if (scope === "primary") await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> ignored (${reasonTag})`);
+    await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> ignored (${reasonTag})`, typeof chatId === "number" ? chatId : undefined);
   }
 
   /**
@@ -444,7 +443,7 @@ export class Runtime extends EventEmitter {
       this.lastHerReplyTs.set(this.histKey(chatId), Date.now());
       this.emit("event", { type: "outgoing", text: candidate, chatId } as RuntimeEvent);
       this.emit("event", { type: "info", text: "neutral-filler вместо silent-fallback" } as RuntimeEvent);
-      if (scope === "primary") await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> она (filler): ${candidate}`);
+      await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> она (filler): ${candidate}`, typeof chatId === "number" ? chatId : undefined);
       hist.push({ role: "assistant", content: candidate, ts: Date.now() });
       this.setDecisionStatus(this.histKey(chatId), "sent", "neutral-filler");
     } catch (e) {
@@ -618,11 +617,15 @@ export class Runtime extends EventEmitter {
       this.histories.set(key, hist);
       this.emit("event", { type: "incoming", text: incomingText, chatId: m.chatId } as RuntimeEvent);
       if (isPrimary) {
-        await appendSessionLog(this.cfg.slug, this.cfg.tz, `[${new Date().toISOString()}] он(${m.fromId}): ${incomingText}`);
+        await appendSessionLog(this.cfg.slug, this.cfg.tz, `[${new Date().toISOString()}] он(${m.fromId}): ${incomingText}`, m.fromId);
+      } else {
+        await appendSessionLog(this.cfg.slug, this.cfg.tz, `[${new Date().toISOString()}] другой(${m.fromId}): ${incomingText}`, m.fromId);
+        await this.rememberSharedCrossChat(m.fromId, incomingText);
+        recordInteractionMemory(this.llm, this.cfg, incomingText, undefined, m.fromId, "acquaintance").catch(() => {});
       }
 
     if (m.media?.kind === "sticker" && m.media.fileId && isPrimary) {
-      addStickerToLibrary(this.cfg, m.media.fileId, m.media.emoji ?? "", ["received"]).catch(() => {});
+      void addStickerToLibrary(this.cfg, m.media.fileId, m.media.emoji ?? "", ["received"]);
     }
 
     const requestedMedia = this.requestedOutgoingMedia(m.text);
@@ -647,7 +650,7 @@ export class Runtime extends EventEmitter {
       }
       if (!bubbles.length) return;
       await this.sendBubbles(m.chatId, bubbles, hist, isPrimary ? "primary" : "acquaintance", true);
-      if (isPrimary) recordInteractionMemory(this.llm, this.cfg, incomingText, bubbles.join(" / ")).catch(() => {});
+      if (isPrimary) recordInteractionMemory(this.llm, this.cfg, incomingText, bubbles.join(" / "), m.fromId, "primary").catch(() => {});
       return;
     }
 
@@ -789,7 +792,7 @@ export class Runtime extends EventEmitter {
         await this.tg.setReaction(m.chatId, target.messageId, tick.reaction!).catch(() => {});
         const msgTag = target.messageId !== m.messageId ? ` (msgId=${target.messageId})` : "";
         this.emit("event", { type: "info", text: `реакция ${tick.reaction}${msgTag} на "${target.text.slice(0, 40)}"` } as RuntimeEvent);
-        appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> reaction ${tick.reaction}${msgTag}`).catch(() => {});
+        appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> reaction ${tick.reaction}${msgTag}`, m.fromId).catch(() => {});
       }, reactDelay).unref?.();
     }
 
@@ -805,8 +808,8 @@ export class Runtime extends EventEmitter {
         await this.tg.readHistory?.(m.chatId).catch(() => {});
       }
       this.emit("event", { type: "ignored", text: incomingText, reason: tick.ignoreReason ?? tick.intent } as RuntimeEvent);
-      await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> ignored (${tick.intent}: ${tick.ignoreReason ?? ""})`);
-      recordInteractionMemory(this.llm, this.cfg, incomingText).catch(() => {});
+      await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> ignored (${tick.intent}: ${tick.ignoreReason ?? ""})`, m.fromId);
+      recordInteractionMemory(this.llm, this.cfg, incomingText, undefined, m.fromId, "primary").catch(() => {});
       return;
     }
 
@@ -859,10 +862,11 @@ export class Runtime extends EventEmitter {
     ];
     const image = imagePartFromMedia(incoming?.media);
     if (image) {
+      const memeHint = memeDetectionInstruction(incoming?.media);
       messages.push({
         role: "user",
         content: [
-          { type: "text", text: "это фото из последнего сообщения. ответь на него как в тг, коротко." },
+          { type: "text", text: `${incoming?.media?.kind === "sticker" ? "это стикер из последнего сообщения. ответь на него как в тг, коротко." : "это фото из последнего сообщения. ответь на него как в тг, коротко."}${memeHint ? `\n${memeHint}` : ""}` },
           image
         ]
       });
@@ -898,7 +902,7 @@ export class Runtime extends EventEmitter {
     const sent = await this.sendBubbles(chatId, bubbles, hist, scope, tick.typing);
     this.setDecisionStatus(this.histKey(chatId), sent.length ? "sent" : "fallback", sent.length ? undefined : "все пузыри были пустыми/дублями");
     if (scope === "primary") {
-      recordInteractionMemory(this.llm, this.cfg, lastUser ?? "", sent.join(" / ")).catch(() => {});
+      recordInteractionMemory(this.llm, this.cfg, lastUser ?? "", sent.join(" / "), typeof chatId === "number" ? chatId : undefined, "primary").catch(() => {});
     }
 
     if (this.tg.sendSticker && Math.random() < 0.08) {
@@ -976,7 +980,7 @@ export class Runtime extends EventEmitter {
         }
         hist.push({ role: "assistant", content: piece, ts: now });
         this.emit("event", { type: "outgoing", text: piece, chatId: item.chatId } as RuntimeEvent);
-        await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> [proactive] она: ${piece}`);
+        await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> [proactive] она: ${piece}`, typeof item.chatId === "number" ? item.chatId : undefined);
       }
       this.histories.set(key, hist);
       await markAgendaFired(this.cfg.slug, item.id);
@@ -1039,7 +1043,6 @@ export class Runtime extends EventEmitter {
       `communication: ${communicationProfileLabel(communication)}`,
       `config: ${profileDir(this.cfg.slug)}/config.json`,
       `score: ${JSON.stringify(rel.score)}`,
-      `mcp: ${this.mcps.map(m => m.id).join(", ") || "—"}`,
       `paused: ${this.paused}`
     ].join("\n");
   }
@@ -1551,7 +1554,7 @@ export class Runtime extends EventEmitter {
       await maybeAdvanceRelationshipTimeline(this.cfg, oldStage, decision.next);
       this.stageStats.set(decision.next, { herMsgs: 0, hisMsgs: 0, ignoresInStage: 0, lastCheckAt: 0, stageEnteredAt: Date.now() });
       this.emit("event", { type: "info", text: `stage ${oldStage} → ${decision.next} (${decision.reason})` } as RuntimeEvent);
-      await appendSessionLog(this.cfg.slug, this.cfg.tz, `[stage-transition] ${oldStage} → ${decision.next} (${decision.reason})`);
+      await appendSessionLog(this.cfg.slug, this.cfg.tz, `[stage-transition] ${oldStage} → ${decision.next} (${decision.reason})`, this.cfg.ownerId);
     } catch { /* swallow */ }
   }
 
@@ -1583,7 +1586,7 @@ export class Runtime extends EventEmitter {
     };
     this.emit("event", { type: "info", text: `delete: ${awareness}${m.deletion.text ? ` "${m.deletion.text.slice(0, 40)}"` : ""}` } as RuntimeEvent);
     if (this.isPrimaryFrom(m.fromId)) {
-      await appendSessionLog(this.cfg.slug, this.cfg.tz, `[deletion ${awareness}] он удалил: "${m.deletion.text.slice(0, 80)}"`);
+      await appendSessionLog(this.cfg.slug, this.cfg.tz, `[deletion ${awareness}] он удалил: "${m.deletion.text.slice(0, 80)}"`, m.fromId);
     }
     if (!shouldRespondToDeletion(ctx)) return;
     if (!inHistory && awareness === "saw-and-read") {
@@ -1674,7 +1677,7 @@ export class Runtime extends EventEmitter {
     }
     this.emit("event", { type: "info", text: `emoji-react ${m.emojiReaction.emoji} (${decision.category}/${decision.intent}): ${decision.reason}` } as RuntimeEvent);
     if (isPrimary) {
-      await appendSessionLog(this.cfg.slug, this.cfg.tz, `[emoji-react] он(${m.fromId}): ${m.emojiReaction.emoji} → ${decision.intent} (${decision.reason})`);
+      await appendSessionLog(this.cfg.slug, this.cfg.tz, `[emoji-react] он(${m.fromId}): ${m.emojiReaction.emoji} → ${decision.intent} (${decision.reason})`, m.fromId);
     }
     if (decision.moodDelta && Object.keys(decision.moodDelta).length > 0) {
       const newScore = applyMoodDelta(rel.score, decision.moodDelta);

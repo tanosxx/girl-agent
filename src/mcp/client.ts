@@ -12,7 +12,7 @@ export interface McpHandle {
 
 export async function startMcpServers(cfg: ProfileConfig): Promise<McpHandle[]> {
   const handles: McpHandle[] = [];
-  for (const slot of cfg.mcp) {
+  for (const slot of cfg.mcp ?? []) {
     const preset = findMcp(slot.id);
     if (!preset?.ready || !preset.spawn) continue;
     try {

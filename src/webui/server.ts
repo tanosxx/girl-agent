@@ -1,6 +1,7 @@
 import http from "node:http";
 import { URL } from "node:url";
 import os from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { Router, HttpError, readBody, sendJson, setCors } from "./http.js";
 import { serveStatic } from "./static.js";
 import { attachWebSockets } from "./websocket.js";
@@ -11,6 +12,8 @@ import { registerSystemRoutes } from "./routes/system.js";
 import { registerAddonRoutes } from "./routes/addons.js";
 import { registerAssistantRoutes } from "./routes/assistant.js";
 import { registerTgAuthRoutes } from "./routes/tg-auth.js";
+import { registerAuthRoutes } from "./routes/auth.js";
+import { isAuthorized } from "./auth.js";
 import { listProfiles, readConfig } from "../storage/md.js";
 
 export interface WebUIServerOptions {
@@ -23,18 +26,60 @@ export interface WebUIServerOptions {
 }
 
 const DEFAULT_PORT = Number(process.env.GIRL_AGENT_PORT ?? 3000);
-const DEFAULT_HOST = process.env.GIRL_AGENT_HOST ?? "127.0.0.1";
+
+function isLikelyDocker(): boolean {
+  if (process.env.GIRL_AGENT_DOCKER || process.env.DOCKER_CONTAINER) return true;
+  try {
+    return os.release().toLowerCase().includes("docker") ||
+      existsSync("/.dockerenv") ||
+      readFileSync("/proc/1/cgroup", "utf8").toLowerCase().includes("docker");
+  } catch {
+    return false;
+  }
+}
+
+function firstExternalIPv4(): string | undefined {
+  for (const items of Object.values(os.networkInterfaces())) {
+    for (const item of items ?? []) {
+      if (item.family === "IPv4" && !item.internal) return item.address;
+    }
+  }
+  return undefined;
+}
+
+function publicUrlForPort(port: number): string {
+  const explicit = process.env.GIRL_AGENT_PUBLIC_URL?.trim();
+  if (explicit) {
+    try {
+      const url = new URL(explicit);
+      if (!url.port) url.port = String(port);
+      return url.toString().replace(/\/$/, "");
+    } catch {
+      const clean = explicit.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      return `http://${clean.includes(":") ? clean : `${clean}:${port}`}`;
+    }
+  }
+  return `http://${firstExternalIPv4() ?? "0.0.0.0"}:${port}`;
+}
+
+const DEFAULT_HOST = process.env.GIRL_AGENT_HOST ?? (isLikelyDocker() ? "0.0.0.0" : "127.0.0.1");
 
 export interface WebUIInstance {
   server: http.Server;
   port: number;
   host: string;
   url: string;
+  urls: {
+    loopback: string;
+    localhost: string;
+    public: string;
+  };
   stop(): Promise<void>;
 }
 
 function buildRouter(): Router {
   const r = new Router();
+  registerAuthRoutes(r);
   registerProfileRoutes(r);
   registerPresetRoutes(r);
   registerSystemRoutes(r);
@@ -58,6 +103,10 @@ export async function startWebUIServer(opts: WebUIServerOptions = {}): Promise<W
       const pathname = url.pathname;
 
       if (pathname.startsWith("/api/")) {
+        if (!pathname.startsWith("/api/auth/") && !isAuthorized(req)) {
+          sendJson(res, 401, { error: "auth required" });
+          return;
+        }
         const matched = router.match(req.method ?? "GET", pathname);
         if (!matched) {
           sendJson(res, 404, { error: "not found", path: pathname });
@@ -110,17 +159,12 @@ export async function startWebUIServer(opts: WebUIServerOptions = {}): Promise<W
     });
   });
 
-  const ifaces = os.networkInterfaces();
-  let displayHost = host;
-  if (host === "0.0.0.0") {
-    for (const k of Object.keys(ifaces)) {
-      for (const i of ifaces[k] ?? []) {
-        if (i.family === "IPv4" && !i.internal) { displayHost = i.address; break; }
-      }
-      if (displayHost !== "0.0.0.0") break;
-    }
-  }
-  const url = `http://${displayHost === "0.0.0.0" ? "127.0.0.1" : displayHost}:${port}`;
+  const urls = {
+    loopback: `http://127.0.0.1:${port}`,
+    localhost: `http://localhost:${port}`,
+    public: publicUrlForPort(port)
+  };
+  const url = urls.localhost;
 
   // Auto-start single profile if requested
   if (opts.autoStart) {
@@ -140,6 +184,7 @@ export async function startWebUIServer(opts: WebUIServerOptions = {}): Promise<W
     port,
     host,
     url,
+    urls,
     async stop() {
       await bus.stopAll();
       await new Promise<void>((resolve) => server.close(() => resolve()));

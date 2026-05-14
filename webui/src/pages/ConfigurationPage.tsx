@@ -14,14 +14,12 @@ export function ConfigurationPage() {
   const [llmPresets, setLLMPresets] = useState<LLMPreset[]>([]);
   const [stages, setStages] = useState<StagePreset[]>([]);
   const [comms, setComms] = useState<CommunicationPreset[]>([]);
-  const [mcpPresets, setMCPPresets] = useState<{ id: string; name: string; description: string; ready: boolean; secrets: { key: string; label: string }[] }[]>([]);
   const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     void api.listLLMPresets().then(r => setLLMPresets(r.presets));
     void api.listStages().then(r => setStages(r.stages));
     void api.listCommunicationPresets().then(r => setComms(r.presets));
-    void api.listMCPPresets().then(r => setMCPPresets(r.presets));
   }, []);
 
   if (!cfg) {
@@ -130,7 +128,7 @@ export function ConfigurationPage() {
           <label>Режим</label>
           <select className="select" value={merged.mode} onChange={e => pf("mode", e.target.value as "bot" | "userbot")}>
             <option value="bot">bot — Bot API (нужен @BotFather токен)</option>
-            <option value="userbot">userbot — MTProto (api_id + api_hash + телефон)</option>
+            <option value="userbot">userbot — MTProto (телефон; api_id/api_hash опционально)</option>
           </select>
           <div className="hint">{merged.mode === "bot"
             ? "Бот может писать только тем, кто уже добавил его в чат через /start. Подходит большинству."
@@ -144,10 +142,11 @@ export function ConfigurationPage() {
           </div>
         ) : (
           <div className="grid cols-2">
-            <div className="form-row"><label>API ID</label><input className="input" value={merged.telegram.apiId ?? ""} onChange={e => pfDeep("telegram.apiId", Number(e.target.value))} /></div>
-            <div className="form-row"><label>API Hash</label><input className="input" type="password" value={merged.telegram.apiHash ?? ""} onChange={e => pfDeep("telegram.apiHash", e.target.value)} /></div>
+            <div className="form-row"><label>API ID (опционально)</label><input className="input" value={merged.telegram.apiId ?? ""} onChange={e => pfDeep("telegram.apiId", Number(e.target.value) || undefined)} placeholder="пусто = прокси автора" /></div>
+            <div className="form-row"><label>API Hash (опционально)</label><input className="input" type="password" value={merged.telegram.apiHash ?? ""} onChange={e => pfDeep("telegram.apiHash", e.target.value || undefined)} placeholder="пусто = прокси автора" /></div>
             <div className="form-row"><label>Телефон</label><input className="input" value={merged.telegram.phone ?? ""} onChange={e => pfDeep("telegram.phone", e.target.value)} placeholder="+79..." /></div>
             <div className="form-row"><label>Session String (если есть)</label><input className="input" type="password" value={merged.telegram.sessionString ?? ""} onChange={e => pfDeep("telegram.sessionString", e.target.value)} /></div>
+            <div className="hint" style={{ gridColumn: "1 / -1" }}>Оставь API ID/Hash пустыми, если входил через «прокси автора».</div>
           </div>
         )}
         <div className="grid cols-2">
@@ -160,7 +159,7 @@ export function ConfigurationPage() {
           </div>
           <div className="form-row">
             <label>Прокси (опционально)</label>
-            <input className="input" value={merged.telegram.proxy ?? ""} onChange={e => pfDeep("telegram.proxy", e.target.value)} placeholder="http://user:pass@host:port или socks5://..." />
+            <input className="input" value={merged.telegram.proxy ?? ""} onChange={e => pfDeep("telegram.proxy", e.target.value)} placeholder="tg://proxy?... или socks5://user:pass@host:port" />
           </div>
         </div>
         <div className="form-row">
@@ -276,50 +275,6 @@ export function ConfigurationPage() {
         </div>
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <div className="h-title">MCP-интеграции</div>
-          <div className="h-meta">внешние tool'ы для девушки (поиск, музыка, календарь...)</div>
-        </div>
-        <div className="grid cols-2">
-          {mcpPresets.map(p => {
-            const enabled = (merged.mcp ?? []).some(m => m.id === p.id);
-            return (
-              <div key={p.id} className="card" style={{ padding: 14 }}>
-                <div className="card-header" style={{ marginBottom: 6 }}>
-                  <strong>{p.name}</strong>
-                  {!p.ready && <span className="chip warn" style={{ marginLeft: 8 }}>скоро</span>}
-                </div>
-                <div className="hint" style={{ marginBottom: 10 }}>{p.description}</div>
-                <label className="toggle">
-                  <input type="checkbox" disabled={!p.ready} checked={enabled} onChange={(e) => {
-                    const cur = merged.mcp ?? [];
-                    if (e.target.checked) {
-                      const secrets: Record<string, string> = {};
-                      for (const s of p.secrets ?? []) secrets[s.key] = "";
-                      pf("mcp", [...cur, { id: p.id, secrets }] as any);
-                    } else {
-                      pf("mcp", cur.filter(m => m.id !== p.id) as any);
-                    }
-                  }} />
-                  <span className="track"><span className="knob" /></span>
-                  <span>{enabled ? "Включён" : "Выключен"}</span>
-                </label>
-                {enabled && p.secrets?.map(s => (
-                  <div key={s.key} className="form-row" style={{ marginTop: 8 }}>
-                    <label>{s.label}</label>
-                    <input className="input" type="password" value={(merged.mcp ?? []).find(m => m.id === p.id)?.secrets[s.key] ?? ""}
-                      onChange={(e) => {
-                        const cur = (merged.mcp ?? []).map(m => m.id === p.id ? { ...m, secrets: { ...m.secrets, [s.key]: e.target.value } } : m);
-                        pf("mcp", cur as any);
-                      }} />
-                  </div>
-                ))}
-              </div>
-            );
-          })}
-        </div>
-      </div>
 
       <div className="card" style={{ borderColor: "rgba(255, 122, 140, 0.3)" }}>
         <div className="card-header">

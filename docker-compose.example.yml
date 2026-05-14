@@ -2,8 +2,9 @@
 # Copy to docker-compose.yml and edit, or run directly:
 #   docker compose -f docker-compose.example.yml up -d
 #
-# For first-time setup (interactive ink wizard):
-#   docker compose run --rm girl-agent
+# For first-time setup (WebUI):
+#   docker compose up -d
+#   open http://localhost:3000
 # Then once a profile exists, switch to detached mode:
 #   docker compose up -d
 version: "3.9"
@@ -13,11 +14,11 @@ services:
     image: ghcr.io/thesashadev/girl-agent:latest
     container_name: girl-agent
     restart: unless-stopped
-    # interactive default (ink TUI); switch to "server --config /config/bot.json --headless"
-    # if you want pure logs and a json config.
-    command: ["server", "--config", "/config/bot.json", "--headless"]
+    # WebUI by default. For pure logs with mounted bot.json, uncomment:
+    # command: ["server", "--config", "/config/bot.json", "--headless"]
     environment:
       GIRL_AGENT_DATA: /data
+      GIRL_AGENT_HOST: 0.0.0.0
       # alternatively, drive everything from env vars (no /config/bot.json needed):
       # GIRL_AGENT_MODE: bot
       # GIRL_AGENT_TOKEN: ${TG_BOT_TOKEN}
@@ -25,9 +26,11 @@ services:
       # GIRL_AGENT_API_KEY: ${LLM_API_KEY}
       # GIRL_AGENT_NAME: Аня
       # GIRL_AGENT_AGE: "22"
+    ports:
+      - "3000:3000"
     volumes:
       - girl-agent-data:/data
-      - ./bot.json:/config/bot.json:ro
+      # - ./bot.json:/config/bot.json:ro
     # to peek at logs:
     #   docker compose logs -f girl-agent
 

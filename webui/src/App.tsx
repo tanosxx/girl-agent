@@ -13,6 +13,7 @@ import { AssistantPage } from "./pages/AssistantPage";
 import { RelationshipPage } from "./pages/RelationshipPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { SetupFlow } from "./pages/SetupFlow";
+import { AuthGate } from "./components/AuthGate";
 
 export function App() {
   const ready = useStore(s => s.ready);
@@ -32,7 +33,7 @@ export function App() {
   }
 
   return (
-    <>
+    <AuthGate>
       <div className="app-shell">
         <aside className="sidebar" data-open={sidebarOpen}>
           <Sidebar />
@@ -54,6 +55,6 @@ export function App() {
       <Toasts />
       <CommandModal />
       {showSetup && <SetupFlow />}
-    </>
+    </AuthGate>
   );
 }

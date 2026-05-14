@@ -1,4 +1,5 @@
 import { Bot } from "grammy";
+import path from "node:path";
 import type { ProfileConfig } from "../types.js";
 import type { IncomingMedia, IncomingMessage, TgAdapter } from "./index.js";
 import { hasSpoilers, toHtmlWithSpoilers } from "./markdown.js";
@@ -12,7 +13,7 @@ export function makeBotAdapter(cfg: ProfileConfig): TgAdapter {
   return {
     async start(onMessage) {
       bot.on("message", async (ctx) => {
-        const media = detectBotMedia(ctx.message as any);
+        const media = await detectBotMedia(bot, token, ctx.message as any);
         const text = ctx.message.text ?? ctx.message.caption ?? "";
         if (!text && !media) return;
         const msg: IncomingMessage = {
@@ -106,15 +107,43 @@ export function makeBotAdapter(cfg: ProfileConfig): TgAdapter {
   };
 }
 
-function detectBotMedia(message: any): IncomingMedia | undefined {
+async function detectBotMedia(bot: Bot, token: string, message: any): Promise<IncomingMedia | undefined> {
   if (message.photo?.length) {
     const p = message.photo[message.photo.length - 1];
-    return { kind: "photo", caption: message.caption, fileId: p.file_id };
+    const out: IncomingMedia = { kind: "photo", caption: message.caption, fileId: p.file_id, mimeType: "image/jpeg" };
+    await hydrateBotImage(bot, token, out);
+    return out;
   }
   if (message.voice) return { kind: "voice", caption: message.caption, fileId: message.voice.file_id, mimeType: message.voice.mime_type };
   if (message.video_note) return { kind: "video_note", fileId: message.video_note.file_id };
   if (message.video) return { kind: "video", caption: message.caption, fileId: message.video.file_id, mimeType: message.video.mime_type };
-  if (message.sticker) return { kind: "sticker", fileId: message.sticker.file_id, emoji: message.sticker.emoji };
+  if (message.sticker) {
+    const out: IncomingMedia = { kind: "sticker", fileId: message.sticker.file_id, emoji: message.sticker.emoji, mimeType: message.sticker.mime_type };
+    if (!message.sticker.is_animated && !message.sticker.is_video) await hydrateBotImage(bot, token, out);
+    return out;
+  }
   if (message.document) return { kind: "document", caption: message.caption, fileId: message.document.file_id, mimeType: message.document.mime_type };
   return undefined;
+}
+
+async function hydrateBotImage(bot: Bot, token: string, media: IncomingMedia): Promise<void> {
+  if (!media.fileId) return;
+  try {
+    const file = await bot.api.getFile(media.fileId);
+    if (!file.file_path) return;
+    const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return;
+    const buf = Buffer.from(await res.arrayBuffer());
+    media.base64 = buf.toString("base64");
+    media.mimeType = media.mimeType ?? mimeTypeForTelegramPath(file.file_path);
+  } catch { /* ignore media download failures */ }
+}
+
+function mimeTypeForTelegramPath(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".png") return "image/png";
+  if (ext === ".gif") return "image/gif";
+  if (ext === ".webp") return "image/webp";
+  return "image/jpeg";
 }
