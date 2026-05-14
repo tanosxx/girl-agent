@@ -38,7 +38,7 @@ RUN apk add --no-cache --virtual .build-deps python3 make g++ \
     && npm cache clean --force \
     && apk del .build-deps
 
-COPY --from=build /app/dist ./dist
+COPY --from=build --chown=app:app /app/dist ./dist
 
 # Profiles live in /data (volume-mountable).
 RUN mkdir -p /data && chown -R app:app /data /home/app

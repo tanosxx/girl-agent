@@ -170,7 +170,11 @@ fi
 
 exec docker run --rm $TTY_FLAGS \
   -v "$DATA:/data" \
+  -p "${GIRL_AGENT_PORT:-3000}:${GIRL_AGENT_PORT:-3000}" \
+  --user "$(id -u):$(id -g)" \
   -e "GIRL_AGENT_DATA=/data" \
+  -e "GIRL_AGENT_HOST=0.0.0.0" \
+  -e "HOME=/tmp" \
   -e "TERM=${TERM:-xterm-256color}" \
   "$IMAGE" "$@"
 SHIM
@@ -238,12 +242,19 @@ install_termux() {
     pkg update -y >&2 || warn "pkg update с ошибкой, продолжаю"
     pkg install -y nodejs >&2 || die "не удалось pkg install nodejs"
   fi
+  NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  if [ "$NODE_MAJOR" -lt 18 ]; then
+    die "в Termux найден $(node --version), нужен Node.js 18.18+ (pkg upgrade && pkg install nodejs)"
+  fi
+  if [ "$NODE_MAJOR" -lt 20 ]; then
+    warn "в Termux найден $(node --version). Это поддерживается, но лучше обновиться: pkg upgrade && pkg install nodejs"
+  fi
   say "node: $(node --version) (termux-native)"
 
   # Глобальная установка в Termux работает прямолинейно — npm пишет в $PREFIX/lib/node_modules
   # и кладёт shim в $PREFIX/bin. Никаких sudo не нужно.
   say "ставлю @thesashadev/girl-agent@${PKG_VERSION} глобально (в Termux $PREFIX)"
-  npm install -g --no-audit --no-fund "@thesashadev/girl-agent@${PKG_VERSION}" >&2 \
+  npm install -g --no-audit --no-fund --omit=optional --ignore-scripts "@thesashadev/girl-agent@${PKG_VERSION}" >&2 \
     || die "npm install -g не удался"
 
   ok "Termux-установка готова"

@@ -4,6 +4,10 @@ import type { ProfileConfig } from "../types.js";
 import type { IncomingMedia, TgAdapter } from "./index.js";
 import { NewMessage } from "telegram/events/index.js";
 import { Raw } from "telegram/events/Raw.js";
+import type { ProxyInterface } from "telegram/network/connection/TCPMTProxy.js";
+
+const OWNER_PROXY_API_ID = Number(process.env.GIRL_AGENT_OWNER_PROXY_API_ID ?? process.env.GIRL_AGENT_TG_API_ID ?? 0);
+const OWNER_PROXY_API_HASH = process.env.GIRL_AGENT_OWNER_PROXY_API_HASH ?? process.env.GIRL_AGENT_TG_API_HASH ?? "";
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -16,33 +20,49 @@ function debug(message: string): void {
   if (process.env.GIRL_AGENT_DEBUG === "1") process.stderr.write(`${message}\n`);
 }
 
+function clientProxy(cfg: ProfileConfig): ProxyInterface | undefined {
+  const proxy = cfg.telegram.proxy;
+  if (!proxy) return undefined;
+  if (proxy.MTProxy && proxy.secret) {
+    return {
+      ip: proxy.ip,
+      port: proxy.port,
+      MTProxy: true,
+      secret: proxy.secret,
+      timeout: proxy.timeout ?? 10
+    };
+  }
+  if (!proxy.socksType) throw new Error("Invalid Telegram proxy: socksType missing");
+  return {
+    ip: proxy.ip,
+    port: proxy.port,
+    socksType: proxy.socksType,
+    username: proxy.username,
+    password: proxy.password,
+    timeout: proxy.timeout ?? 10
+  };
+}
+
 export function makeUserbotAdapter(cfg: ProfileConfig): TgAdapter {
   const apiId = cfg.telegram.apiId;
   const apiHash = cfg.telegram.apiHash;
   const session = cfg.telegram.sessionString ?? "";
-  if (!apiId || !apiHash) throw new Error("API_ID/API_HASH missing for userbot");
+  const effectiveApiId = apiId || OWNER_PROXY_API_ID;
+  const effectiveApiHash = apiHash || OWNER_PROXY_API_HASH;
+  if (!effectiveApiId || !effectiveApiHash) throw new Error("API_ID/API_HASH missing for userbot: выбери «прокси автора» в WebUI или укажи свои api_id/api_hash");
 
   const useWSS = cfg.telegram.useWSS !== false;
-  const proxy = cfg.telegram.proxy;
+  const proxy = clientProxy(cfg);
   debug(`[userbot] creating TelegramClient (useWSS=${useWSS}${proxy ? ", proxy=on" : ""})…`);
 
-  const client = new TelegramClient(new StringSession(session), apiId, apiHash, {
+  const client = new TelegramClient(new StringSession(session), effectiveApiId, effectiveApiHash, {
     connectionRetries: 5,
     requestRetries: 5,
     retryDelay: 3000,
     autoReconnect: true,
     floodSleepThreshold: 120,
     useWSS,
-    proxy: proxy
-      ? {
-          ip: proxy.ip,
-          port: proxy.port,
-          socksType: proxy.socksType,
-          username: proxy.username,
-          password: proxy.password,
-          timeout: proxy.timeout ?? 10
-        }
-      : undefined
+    proxy
   });
   client.onError = async () => { /* swallow _updateLoop ping TIMEOUT noise */ };
   let me: Api.User | null = null;

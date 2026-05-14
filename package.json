@@ -15,8 +15,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup && npm run build:webui",
+    "build": "npm run build:server && npm run build:webui",
     "build:server": "tsup",
+    "build:termux": "npm run build:server -- --env.NODE_OPTIONS=--max-old-space-size=384 && cd webui && npm install --silent --no-audit --no-fund && npm run build -- --minify=false",
     "build:webui": "cd webui && npm install --silent --no-audit --no-fund && npm run build",
     "dev": "tsx src/cli.ts",
     "dev:webui": "cd webui && npm run dev",
@@ -39,7 +40,7 @@
     "openai"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=18.18"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

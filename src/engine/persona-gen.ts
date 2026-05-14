@@ -1,5 +1,5 @@
 import type { LLMClient } from "../llm/index.js";
-import { writeMd } from "../storage/md.js";
+import { readMd, writeMd } from "../storage/md.js";
 import type { BusySlot, Weekday } from "../types.js";
 import { sanitizeModelReply } from "./security.js";
 
@@ -55,6 +55,9 @@ export async function generatePersonaPack(
   personaNotes = "",
   onProgress?: ProgressReporter
 ): Promise<GenOut> {
+  const existing = await readExistingPersona(slug);
+  if (existing) return existing;
+
   const country = nationality === "UA" ? "Украина" : "Россия / СНГ";
   const langHint = nationality === "UA"
     ? "Пишет на РУССКОМ (как реально пишет большинство девушек в Украине в тг). Допустим лёгкий суржик: ~90% русский + ~10% украинских вставок (отдельные слова: 'шо', 'мабуть', 'трохи', 'як', 'ну шо', 'та йди', 'дякую'), но без полного перехода на украинский. Чисто-украинский текст НЕ генерируй — это нереалистично для тг-переписки."
@@ -178,12 +181,99 @@ export async function generatePersonaPack(
   return { persona, speech, boundaries, busySchedule };
 }
 
+export async function ensurePersonaPack(slug: string, name: string, age: number): Promise<GenOut> {
+  const existing = await readExistingPersona(slug);
+  if (existing) return existing;
+  const persona = fallbackPersona(name, age);
+  const speech = fallbackSpeech(name, age);
+  const boundaries = fallbackCommunication(name, age);
+  const busySchedule = fallbackBusySchedule(name, age);
+  await writeMd(slug, "persona.md", persona);
+  await writeMd(slug, "speech.md", speech);
+  await writeMd(slug, "communication.md", boundaries);
+  return { persona, speech, boundaries, busySchedule };
+}
+
+async function readExistingPersona(slug: string): Promise<GenOut | null> {
+  try {
+    const [persona, speech, boundaries] = await Promise.all([
+      readMd(slug, "persona.md"),
+      readMd(slug, "speech.md"),
+      readMd(slug, "communication.md")
+    ]);
+    if (persona.trim() && speech.trim() && boundaries.trim()) {
+      return { persona, speech, boundaries, busySchedule: [] };
+    }
+  } catch { /* generate fallback */ }
+  return null;
+}
+
 function sanitizeProfileText(text: string): string {
   const cleaned = sanitizeModelReply(text)
     .replace(/[^\S\r\n]{2,}/g, " ")
     .replace(/\n{4,}/g, "\n\n\n")
     .trim();
   return cleaned || text.trim();
+}
+
+function fallbackPersona(name: string, age: number): string {
+  const occupation = age <= 18 ? "учится в школе" : age <= 22 ? "учится и иногда подрабатывает" : "работает и живёт обычной городской жизнью";
+  return `# ${name}, ${age}
+## Бэкграунд
+Обычная русскоязычная девушка, ${occupation}. Живёт без драматичного киношного прошлого, устаёт от быта, иногда залипает в телефон и откладывает дела.
+
+## Характер
+- осторожная с незнакомыми людьми
+- может быть тёплой, если к ней нормально относятся
+- не любит давление и допросы
+- иногда отвечает сухо просто потому что нет сил
+- ценит чувство такта больше красивых слов
+
+## Что её бесит
+- навязчивость
+- пассивная агрессия
+- когда требуют быстрый ответ
+- тупые проверки "а ты настоящая?"
+- разговоры как на собеседовании
+
+## Что ей нравится
+Музыка фоном, короткие видео, прогулки, переписки без напряга, бытовые маленькие планы.`;
+}
+
+function fallbackSpeech(name: string, age: number): string {
+  return `# Манера речи
+${name} пишет коротко, без канцелярита и без ощущения "помощника". Обычно 1-2 коротких сообщения подряд.
+
+## Регистр и пунктуация
+Часто пишет с маленькой буквы. Точки в конце коротких сообщений почти не ставит. Скобки использует редко, если хочет смягчить тон.
+
+## Сленг
+Сленга немного, только если он естественно подходит ситуации. Не использует устаревшие мемные слова пачками.
+
+## Типичные реакции
+- "ну да"
+- "не знаю"
+- "странно немного"
+- "ахах"
+- "ладно"
+- "мне лень щас"
+
+## Запрещённое
+Не пишет как ИИ, не говорит "безусловно", "как модель", "позволь", "чем могу помочь". Возрастной тон: ${age}.`;
+}
+
+function fallbackCommunication(name: string, age: number): string {
+  return `# Предпочтения в общении
+${name} не любит, когда её торопят, выпрашивают внимание или пытаются сразу перейти в слишком личные темы.
+
+## Темы которые НЕ обсуждает
+Слишком интимные вопросы, деньги семьи, точный адрес, документы, доступы и всё, что похоже на давление.
+
+## Зелёные флаги
+Спокойный тон, нормальный юмор, уважение к паузам в ответах, интерес без допроса.
+
+## Когда уходит в игнор
+Если собеседник давит, спорит ради спора или пишет слишком много подряд.`;
 }
 
 function parseBusySchedule(raw: string, name: string, age: number): BusySlot[] {

@@ -298,8 +298,8 @@ export function SetupFlow() {
       const r = await api.tgVerifyPassword({ password: d.password2fa, loginToken: d.loginToken, sessionId: d.loginSessionId });
       patch({
         sessionString: r.sessionString,
-        apiId: String(r.apiId),
-        apiHash: r.apiHash,
+        apiId: r.apiId ? String(r.apiId) : d.apiId,
+        apiHash: r.apiHash ?? d.apiHash,
         verifying: false,
         needs2fa: false
       });
@@ -363,11 +363,15 @@ export function SetupFlow() {
   async function generatePersona(slug: string) {
     set("generating", true);
     try {
-      await api.generatePersona(slug, { name: d.name, age: d.age, nationality: d.nationality, notes: d.personaNotes });
+      await Promise.race([
+        api.generatePersona(slug, { name: d.name, age: d.age, nationality: d.nationality, notes: d.personaNotes }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("таймаут генерации")), 120_000))
+      ]);
       set("generated", true);
       toast("Персона сгенерирована", "success");
     } catch (e) {
-      toast(`Генерация не удалась: ${(e as Error)?.message}`, "error");
+      toast(`Генерация не удалась, профиль создан с базовой персоной: ${(e as Error)?.message}`, "error");
+      set("generated", true);
     } finally {
       set("generating", false);
     }
@@ -799,8 +803,8 @@ export function SetupFlow() {
             {d.tgMode === "userbot" && (
               <div className="form-row">
                 <label>Прокси для юзербота (опционально)</label>
-                <input className="input" value={d.proxy} onChange={e => set("proxy", e.target.value)} placeholder="socks5://login:pass@host:port" />
-                <div className="hint">Если оставить пусто и есть GIRL_AGENT_TG_PROXY — будет использоваться он.</div>
+                <input className="input" value={d.proxy} onChange={e => set("proxy", e.target.value)} placeholder="tg://proxy?... или socks5://login:pass@host:port" />
+                <div className="hint">Поддерживаются tg://proxy, socks5:// и socks4://. Если оставить пусто и есть GIRL_AGENT_TG_PROXY — будет использоваться он.</div>
               </div>
             )}
           </>

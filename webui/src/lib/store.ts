@@ -122,13 +122,14 @@ export const useStore = create<State>((set, get) => ({
     const { activeSlug, draft } = get();
     if (!activeSlug || !draft) return;
     try {
-      await api.updateProfile(activeSlug, draft);
-      set({ draft: null });
+      const updated = await api.updateProfile(activeSlug, draft);
+      set({ activeConfig: updated.config });
       get().toast("Конфиг сохранён", "success");
       // restart runtime
       await api.applyProfile(activeSlug);
-      await get().refreshActive();
       await get().refreshProfiles();
+      const fresh = await api.getProfile(activeSlug);
+      set({ activeConfig: fresh.config, draft: null });
       get().toast("Рантайм перезапущен", "success");
     } catch (e) {
       get().toast(`Ошибка применения: ${(e as Error)?.message}`, "error");

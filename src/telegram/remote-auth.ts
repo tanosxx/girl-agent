@@ -18,8 +18,8 @@ export interface SendCodeResult {
 
 export interface AuthSuccess {
   sessionString: string;
-  apiId: number;
-  apiHash: string;
+  apiId?: number;
+  apiHash?: string;
 }
 
 export interface Needs2FA {

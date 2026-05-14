@@ -22,7 +22,7 @@ import {
 import { closeCurrentSession, closeStaleSessions } from "./daily-summarizer.js";
 import { loadRealismContext, maybeAdvanceRelationshipTimeline, recordInteractionMemory } from "./realism.js";
 import { mineUnminedDailyLogs } from "./memory-palace.js";
-import { describeIncomingMedia, imagePartFromMedia } from "./media.js";
+import { describeIncomingMedia, imagePartFromMedia, memeDetectionInstruction } from "./media.js";
 import { looksLikeJailbreak, sanitizeModelReply, silentErrorLabel } from "./security.js";
 import { addStickerToLibrary, pickSticker } from "./stickers.js";
 import { EventEmitter } from "node:events";
@@ -318,7 +318,6 @@ export class Runtime extends EventEmitter {
     if (!media) return m.text;
     return m.text ? `${media}\n${m.text}` : media;
   }
-
 
   private async rememberSharedCrossChat(fromId: number, incomingText: string): Promise<void> {
     const text = incomingText.trim();
@@ -863,10 +862,11 @@ export class Runtime extends EventEmitter {
     ];
     const image = imagePartFromMedia(incoming?.media);
     if (image) {
+      const memeHint = memeDetectionInstruction(incoming?.media);
       messages.push({
         role: "user",
         content: [
-          { type: "text", text: incoming?.media?.kind === "sticker" ? "это стикер из последнего сообщения. ответь на него как в тг, коротко." : "это фото из последнего сообщения. ответь на него как в тг, коротко." },
+          { type: "text", text: `${incoming?.media?.kind === "sticker" ? "это стикер из последнего сообщения. ответь на него как в тг, коротко." : "это фото из последнего сообщения. ответь на него как в тг, коротко."}${memeHint ? `\n${memeHint}` : ""}` },
           image
         ]
       });

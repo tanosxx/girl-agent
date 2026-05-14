@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, accessSync, constants } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { ProfileConfig, RelationshipScore } from "../types.js";
@@ -18,9 +18,20 @@ export const DATA_ROOT = process.env.GIRL_AGENT_DATA
   ? path.resolve(process.env.GIRL_AGENT_DATA)
   : defaultDataRoot();
 
+function canWriteDir(dir: string): boolean {
+  try {
+    existsSync(dir) || mkdirSync(dir, { recursive: true });
+    accessSync(dir, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function defaultDataRoot(): string {
   const cwd = process.cwd();
-  if (looksLikeProjectRoot(cwd)) return path.resolve(cwd, "data");
+  const projectData = path.resolve(cwd, "data");
+  if (looksLikeProjectRoot(cwd) && canWriteDir(path.dirname(projectData))) return projectData;
   // Issue #72: на Windows храним в %APPDATA%\\girl-agent\\data — это ожидаемое
   // место для конфига npm-приложений, при отсутствии XDG.
   if (process.platform === "win32") {

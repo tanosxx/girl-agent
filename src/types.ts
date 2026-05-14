@@ -9,7 +9,9 @@ export type Nationality = "RU" | "UA";
 export interface TelegramProxyConfig {
   ip: string;
   port: number;
-  socksType: 4 | 5;
+  socksType?: 4 | 5;
+  MTProxy?: true;
+  secret?: string;
   username?: string;
   password?: string;
   timeout?: number;

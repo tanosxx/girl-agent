@@ -128,7 +128,7 @@ export function ConfigurationPage() {
           <label>Режим</label>
           <select className="select" value={merged.mode} onChange={e => pf("mode", e.target.value as "bot" | "userbot")}>
             <option value="bot">bot — Bot API (нужен @BotFather токен)</option>
-            <option value="userbot">userbot — MTProto (api_id + api_hash + телефон)</option>
+            <option value="userbot">userbot — MTProto (телефон; api_id/api_hash опционально)</option>
           </select>
           <div className="hint">{merged.mode === "bot"
             ? "Бот может писать только тем, кто уже добавил его в чат через /start. Подходит большинству."
@@ -142,10 +142,11 @@ export function ConfigurationPage() {
           </div>
         ) : (
           <div className="grid cols-2">
-            <div className="form-row"><label>API ID</label><input className="input" value={merged.telegram.apiId ?? ""} onChange={e => pfDeep("telegram.apiId", Number(e.target.value))} /></div>
-            <div className="form-row"><label>API Hash</label><input className="input" type="password" value={merged.telegram.apiHash ?? ""} onChange={e => pfDeep("telegram.apiHash", e.target.value)} /></div>
+            <div className="form-row"><label>API ID (опционально)</label><input className="input" value={merged.telegram.apiId ?? ""} onChange={e => pfDeep("telegram.apiId", Number(e.target.value) || undefined)} placeholder="пусто = прокси автора" /></div>
+            <div className="form-row"><label>API Hash (опционально)</label><input className="input" type="password" value={merged.telegram.apiHash ?? ""} onChange={e => pfDeep("telegram.apiHash", e.target.value || undefined)} placeholder="пусто = прокси автора" /></div>
             <div className="form-row"><label>Телефон</label><input className="input" value={merged.telegram.phone ?? ""} onChange={e => pfDeep("telegram.phone", e.target.value)} placeholder="+79..." /></div>
             <div className="form-row"><label>Session String (если есть)</label><input className="input" type="password" value={merged.telegram.sessionString ?? ""} onChange={e => pfDeep("telegram.sessionString", e.target.value)} /></div>
+            <div className="hint" style={{ gridColumn: "1 / -1" }}>Оставь API ID/Hash пустыми, если входил через «прокси автора».</div>
           </div>
         )}
         <div className="grid cols-2">
@@ -158,7 +159,7 @@ export function ConfigurationPage() {
           </div>
           <div className="form-row">
             <label>Прокси (опционально)</label>
-            <input className="input" value={merged.telegram.proxy ?? ""} onChange={e => pfDeep("telegram.proxy", e.target.value)} placeholder="http://user:pass@host:port или socks5://..." />
+            <input className="input" value={merged.telegram.proxy ?? ""} onChange={e => pfDeep("telegram.proxy", e.target.value)} placeholder="tg://proxy?... или socks5://user:pass@host:port" />
           </div>
         </div>
         <div className="form-row">

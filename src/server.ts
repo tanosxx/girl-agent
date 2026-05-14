@@ -364,6 +364,14 @@ function parseTelegramProxy(raw: string | undefined): ProfileConfig["telegram"][
   if (!raw?.trim()) return undefined;
   try {
     const url = new URL(raw);
+    if (url.protocol === "tg:" && url.hostname === "proxy") {
+      const ip = url.searchParams.get("server")?.trim();
+      const port = Number(url.searchParams.get("port"));
+      const secret = url.searchParams.get("secret")?.trim();
+      if (!ip || !Number.isInteger(port) || port <= 0 || !secret) return undefined;
+      return { ip, port, MTProxy: true, secret };
+    }
+    if (url.protocol !== "socks4:" && url.protocol !== "socks5:") return undefined;
     const socksType = url.protocol === "socks4:" ? 4 : 5;
     const port = Number(url.port);
     if (!url.hostname || !Number.isInteger(port) || port <= 0) return undefined;

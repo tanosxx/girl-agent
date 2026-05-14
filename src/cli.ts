@@ -17,6 +17,15 @@ import { defaultTzForNationality, parseTzFlag } from "./data/timezones.js";
 import { pickRandomNames } from "./data/names.js";
 import { communicationProfileLabel, deriveLegacyVibe, findCommunicationPreset, normalizeCommunicationProfile } from "./presets/communication.js";
 
+const nodeMajor = Number(process.versions.node.split(".")[0] ?? 0);
+if (nodeMajor < 18) {
+  process.stderr.write(`[girl-agent] Node.js ${process.version} не поддерживается. Нужен Node.js 18.18+; в Termux: pkg install nodejs\n`);
+  process.exit(1);
+}
+if (nodeMajor < 20) {
+  process.stderr.write(`[girl-agent] предупреждение: Node.js ${process.version}; рекомендуется 20/22, но продолжаю запуск.\n`);
+}
+
 const HELP = `
 girl-agent — AI girl for Telegram (WebUI)
 
@@ -169,16 +178,12 @@ async function main(): Promise<void> {
     noBrowser: !!argv["no-browser"]
   });
 
-  const showHost = host === "0.0.0.0" ? "<public-ip>" : (host === "127.0.0.1" ? "localhost" : host);
-  const localHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
-  const localUrl = `http://${localHost === "127.0.0.1" ? "localhost" : localHost}:${port}`;
-
-  process.stdout.write(`\n  🌐 girl-agent WebUI запущен\n     ${instance.url}\n`);
-  if (host === "0.0.0.0") {
-    process.stdout.write(`     слушает на всех интерфейсах — открой http://<your-ip>:${port}\n`);
-  }
-  process.stdout.write(`\n  REST API:        ${localUrl}/api/system/health\n`);
-  process.stdout.write(`  WebSocket logs:  ws://${showHost}:${port}/ws/logs/<slug>\n`);
+  process.stdout.write(`\n  🌐 girl-agent WebUI запущен\n`);
+  process.stdout.write(`     1) ${instance.urls.loopback}\n`);
+  process.stdout.write(`     2) ${instance.urls.localhost}\n`);
+  process.stdout.write(`     3) ${instance.urls.public}\n`);
+  process.stdout.write(`\n  REST API:        ${instance.urls.loopback}/api/system/health\n`);
+  process.stdout.write(`  WebSocket logs:  ws://127.0.0.1:${port}/ws/logs/<slug>\n`);
   process.stdout.write(`  Ctrl+C для остановки\n\n`);
 
   // Авто-старт указанного профиля

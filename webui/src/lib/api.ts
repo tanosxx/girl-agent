@@ -75,6 +75,12 @@ export interface InstalledAddon {
   installedFiles?: string[];
 }
 
+export class AuthRequiredError extends Error {
+  constructor() {
+    super("auth required");
+  }
+}
+
 const BASE = ((): string => {
   if (typeof window === "undefined") return "";
   // dev: vite proxies /api to backend
@@ -97,12 +103,22 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   try { data = await res.json(); } catch { /* may be empty */ }
   if (!res.ok) {
     const msg = (data as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`;
+    if (res.status === 401 && msg === "auth required") throw new AuthRequiredError();
     throw new ApiError(res.status, msg, data);
   }
   return data as T;
 }
 
 export const api = {
+  async authStatus() {
+    return req<{ enabled: boolean }>("GET", "/api/auth/status");
+  },
+  async login(password: string) {
+    return req<{ ok: true }>("POST", "/api/auth/login", { password });
+  },
+  async logout() {
+    return req<{ ok: true }>("POST", "/api/auth/logout");
+  },
   async listProfiles() {
     return req<{ profiles: ProfileSummary[]; dataRoot: string }>("GET", "/api/profiles");
   },
@@ -213,7 +229,7 @@ export const api = {
     );
   },
   async tgVerifyPassword(payload: { password: string; loginToken?: string; sessionId?: string }) {
-    return req<{ sessionString: string; apiId: number; apiHash: string }>(
+    return req<{ sessionString: string; apiId?: number; apiHash?: string }>(
       "POST", "/api/tg/userbot/verify-password", payload
     );
   }

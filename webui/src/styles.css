@@ -462,6 +462,25 @@ a:hover { text-decoration: underline; }
 }
 @keyframes setup-in { from { opacity: 0; transform: translateY(20px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
+.auth-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bone);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bone2);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 28px;
+  box-shadow: var(--ga-shadow);
+}
+
 .setup-stepper { display: flex; gap: 6px; margin-bottom: 24px; }
 .setup-step { flex: 1; height: 3px; background: var(--ga-border); border-radius: 2px; transition: background 0.4s var(--ga-spring); }
 .setup-step.done { background: var(--accent2); }

@@ -12,6 +12,8 @@ import { registerSystemRoutes } from "./routes/system.js";
 import { registerAddonRoutes } from "./routes/addons.js";
 import { registerAssistantRoutes } from "./routes/assistant.js";
 import { registerTgAuthRoutes } from "./routes/tg-auth.js";
+import { registerAuthRoutes } from "./routes/auth.js";
+import { isAuthorized } from "./auth.js";
 import { listProfiles, readConfig } from "../storage/md.js";
 
 export interface WebUIServerOptions {
@@ -36,19 +38,6 @@ function isLikelyDocker(): boolean {
   }
 }
 
-function displayHostForUrl(host: string): string {
-  const explicit = process.env.GIRL_AGENT_PUBLIC_URL?.trim();
-  if (explicit) {
-    try {
-      return new URL(explicit).host;
-    } catch {
-      return explicit.replace(/^https?:\/\//, "").replace(/\/+$/, "");
-    }
-  }
-  if (host === "0.0.0.0" || host === "::") return isLikelyDocker() ? "localhost" : firstExternalIPv4() ?? "localhost";
-  return host === "127.0.0.1" ? "localhost" : host;
-}
-
 function firstExternalIPv4(): string | undefined {
   for (const items of Object.values(os.networkInterfaces())) {
     for (const item of items ?? []) {
@@ -58,6 +47,21 @@ function firstExternalIPv4(): string | undefined {
   return undefined;
 }
 
+function publicUrlForPort(port: number): string {
+  const explicit = process.env.GIRL_AGENT_PUBLIC_URL?.trim();
+  if (explicit) {
+    try {
+      const url = new URL(explicit);
+      if (!url.port) url.port = String(port);
+      return url.toString().replace(/\/$/, "");
+    } catch {
+      const clean = explicit.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      return `http://${clean.includes(":") ? clean : `${clean}:${port}`}`;
+    }
+  }
+  return `http://${firstExternalIPv4() ?? "0.0.0.0"}:${port}`;
+}
+
 const DEFAULT_HOST = process.env.GIRL_AGENT_HOST ?? (isLikelyDocker() ? "0.0.0.0" : "127.0.0.1");
 
 export interface WebUIInstance {
@@ -65,11 +69,17 @@ export interface WebUIInstance {
   port: number;
   host: string;
   url: string;
+  urls: {
+    loopback: string;
+    localhost: string;
+    public: string;
+  };
   stop(): Promise<void>;
 }
 
 function buildRouter(): Router {
   const r = new Router();
+  registerAuthRoutes(r);
   registerProfileRoutes(r);
   registerPresetRoutes(r);
   registerSystemRoutes(r);
@@ -93,6 +103,10 @@ export async function startWebUIServer(opts: WebUIServerOptions = {}): Promise<W
       const pathname = url.pathname;
 
       if (pathname.startsWith("/api/")) {
+        if (!pathname.startsWith("/api/auth/") && !isAuthorized(req)) {
+          sendJson(res, 401, { error: "auth required" });
+          return;
+        }
         const matched = router.match(req.method ?? "GET", pathname);
         if (!matched) {
           sendJson(res, 404, { error: "not found", path: pathname });
@@ -145,7 +159,12 @@ export async function startWebUIServer(opts: WebUIServerOptions = {}): Promise<W
     });
   });
 
-  const url = `http://${displayHostForUrl(host)}:${port}`;
+  const urls = {
+    loopback: `http://127.0.0.1:${port}`,
+    localhost: `http://localhost:${port}`,
+    public: publicUrlForPort(port)
+  };
+  const url = urls.localhost;
 
   // Auto-start single profile if requested
   if (opts.autoStart) {
@@ -165,6 +184,7 @@ export async function startWebUIServer(opts: WebUIServerOptions = {}): Promise<W
     port,
     host,
     url,
+    urls,
     async stop() {
       await bus.stopAll();
       await new Promise<void>((resolve) => server.close(() => resolve()));
