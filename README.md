@@ -90,6 +90,41 @@ npx @thesashadev/girl-agent              # ink-визард
 npx @thesashadev/girl-agent --profile=arina
 ```
 
+### Termux на Android
+
+Ставь Termux из F-Droid/GitHub, не из Google Play: старая Play-версия часто ломает пакеты.
+
+```sh
+pkg update && pkg upgrade -y
+pkg install -y nodejs
+curl -fsSL https://raw.githubusercontent.com/TheSashaDev/girl-agent/master/scripts/install.sh | sh
+girl-agent
+```
+
+После `girl-agent` WebUI будет доступен на телефоне:
+
+```text
+http://127.0.0.1:3000
+http://localhost:3000
+```
+
+Если хочешь открыть WebUI с ПК в той же Wi-Fi сети:
+
+```sh
+girl-agent --host=0.0.0.0
+```
+
+Потом открой ссылку вида `http://<ip-телефона>:3000`, которую girl-agent напечатает третьей строкой.
+
+Полезные команды Termux:
+
+```sh
+termux-wake-lock        # чтобы Android не усыплял процесс при блокировке экрана
+termux-setup-storage    # если нужен доступ к файлам телефона
+npm install -g @thesashadev/girl-agent@latest  # обновить
+npm uninstall -g @thesashadev/girl-agent       # удалить
+```
+
 ### docker (для серверов; нулевые зависимости на хосте)
 
 Интерактивная первичная настройка (ink-визард внутри контейнера):
