@@ -5,6 +5,7 @@ import {
   readSessionLog, listSessionDays, listDailySummaries, readDailySummary
 } from "../../storage/md.js";
 import type { ProfileConfig } from "../../types.js";
+import { parseTelegramProxyInput } from "../../telegram/proxy-parse.js";
 import { bus } from "../runtime-bus.js";
 import { findStage } from "../../presets/stages.js";
 import { ensurePersonaPack, generatePersonaPack } from "../../engine/persona-gen.js";
@@ -80,6 +81,13 @@ export function registerProfileRoutes(r: Router): void {
     if (!incoming || typeof incoming !== "object") throw new HttpError(400, "invalid body");
     const merged: ProfileConfig = { ...cur, ...incoming, slug: cur.slug };
     if (incoming.ownerId !== undefined) merged.ownerId = normalizeOwnerId(incoming.ownerId);
+    if (incoming.telegram) {
+      merged.telegram = {
+        ...cur.telegram,
+        ...incoming.telegram,
+        proxy: parseTelegramProxyInput(incoming.telegram.proxy as unknown as string | undefined)
+      };
+    }
     await writeConfig(merged);
     return { config: merged };
   });
@@ -90,6 +98,7 @@ export function registerProfileRoutes(r: Router): void {
     const slug = data.slug || slugify(data.name);
     const existing = await readConfig(slug);
     if (existing) throw new HttpError(409, `profile already exists: ${slug}`);
+    const incomingTg = data.telegram ?? {};
     const cfg: ProfileConfig = {
       slug,
       name: data.name,
@@ -99,7 +108,10 @@ export function registerProfileRoutes(r: Router): void {
       mode: data.mode ?? "bot",
       stage: data.stage ?? "tg-given-cold",
       llm: data.llm ?? { presetId: "claudehub", proto: "anthropic", apiKey: "", model: "claude-sonnet-4.6" },
-      telegram: data.telegram ?? {},
+      telegram: {
+        ...incomingTg,
+        proxy: parseTelegramProxyInput(incomingTg.proxy as unknown as string | undefined)
+      },
       privacy: data.privacy ?? "owner-only",
       ownerId: normalizeOwnerId(data.ownerId),
       createdAt: new Date().toISOString(),
