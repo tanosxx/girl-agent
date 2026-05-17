@@ -1,31 +1,200 @@
-girl-agent Source-Available Non-Commercial License
+girl-agent Source-Available Community License (GSACL)
+Version 1.1
 
-Copyright (c) 2026 girl-agent contributors.
-All rights reserved except as expressly stated below.
+Copyright (c) 2026 girl-agent contributors
 
-Permission is granted to view, download, clone, and run this software
-for personal, educational, evaluation, and non-commercial testing purposes.
+All rights reserved except as expressly permitted below.
 
-Permission is also granted to create forks and submit issues, pull requests,
-bug reports, patches, and improvement suggestions to the original repository.
+-------------------------------------------------------------------------------
+1. DEFINITIONS
+-------------------------------------------------------------------------------
 
-You may modify the software only for the purpose of personal testing,
-evaluation, or contributing improvements back to the original project.
+"Software" means the girl-agent project, including source code, binaries,
+scripts, prompts, models, datasets, APIs, configuration files, documentation,
+examples, assets, and related materials.
 
-You may not, without prior written permission from the copyright holder:
+"Project" means the original girl-agent repository and its maintainers.
 
-1. use this software or substantial portions of it for commercial purposes;
-2. sell, rent, sublicense, host, or provide this software as a paid service;
-3. publish or distribute a competing product or public clone based on this software;
-4. use this software in a commercial product, service, or company project;
-5. remove or alter copyright notices, attribution, or license terms;
-6. relicense this software under another license;
-7. use the project name, branding, logo, documentation, or assets in a way that suggests endorsement or ownership.
+"Non-Commercial Use" means personal, educational, academic, research,
+security research, hobby, evaluation, open collaboration, and community use
+that does not primarily generate revenue or provide a commercial business
+service.
 
-Any contribution submitted to the original repository, including pull requests,
-patches, issues, ideas, documentation changes, or code suggestions, may be used,
-modified, and distributed by the project maintainers as part of this project.
+"Commercial Use" includes selling, licensing, SaaS hosting, paid APIs,
+enterprise/internal business usage, monetized services, or using the Software
+as part of a commercial product or platform.
 
-This license does not grant any trademark rights.
+"Community Contribution" means forks, pull requests, patches, plugins,
+extensions, fixes, tools, integrations, documentation, translations,
+benchmarks, tutorials, or derivative works created in good faith to improve,
+support, expand, or help the Project ecosystem.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+-------------------------------------------------------------------------------
+2. PERMITTED USES
+-------------------------------------------------------------------------------
+
+Subject to compliance with this license, you are granted a limited,
+revocable, non-exclusive, non-transferable license to:
+
+a) use, run, study, modify, and experiment with the Software
+   for Non-Commercial Use;
+
+b) create public or private forks;
+
+c) publish modified versions and derivative works;
+
+d) create plugins, integrations, tooling, wrappers, extensions,
+   datasets, prompts, documentation, tutorials, and ecosystem projects;
+
+e) contribute improvements back to the Project;
+
+f) publicly discuss, benchmark, analyze, review, audit,
+   and research the Software;
+
+g) create community editions, experimental branches,
+   compatibility layers, and interoperability projects,
+   provided they comply with this license.
+
+Community activity intended to benefit, expand, support,
+or improve the Project ecosystem is explicitly encouraged.
+
+-------------------------------------------------------------------------------
+3. ATTRIBUTION
+-------------------------------------------------------------------------------
+
+Any public distribution of the Software or derivative works must:
+
+a) preserve this license;
+
+b) preserve copyright notices and attribution;
+
+c) clearly acknowledge the original Project;
+
+d) clearly indicate significant modifications;
+
+e) avoid falsely presenting modified versions
+   as official releases of the Project.
+
+-------------------------------------------------------------------------------
+4. COMMERCIAL RESTRICTIONS
+-------------------------------------------------------------------------------
+
+Without prior written permission from the copyright holder,
+you may NOT:
+
+a) sell the Software;
+
+b) provide the Software as a paid hosted service or SaaS;
+
+c) monetize API access based substantially on the Software;
+
+d) use the Software inside a proprietary commercial product
+   or enterprise platform;
+
+e) sublicense or relicense the Software under another license;
+
+f) commercially exploit the branding, identity,
+   or reputation of the Project.
+
+Commercial usage intended primarily to extract revenue
+from the Software itself requires separate permission.
+
+-------------------------------------------------------------------------------
+5. COMPETITION AND FAIR USE
+-------------------------------------------------------------------------------
+
+Competition, alternative implementations, forks,
+and ecosystem diversity are allowed.
+
+However, you may NOT:
+
+a) attempt to monopolize the ecosystem surrounding the Software;
+
+b) use dominant market power to suppress, absorb,
+   undermine, or eliminate the original Project;
+
+c) falsely represent your version as the original Project;
+
+d) engage in deceptive practices intended to confuse users,
+   contributors, or developers regarding ownership,
+   authorship, or official affiliation;
+
+e) use the Software primarily to create a misleading clone
+   intended to exploit the reputation of the Project
+   without meaningful differentiation or contribution.
+
+Nothing in this section restricts legitimate competition,
+innovation, research, or independent development.
+
+-------------------------------------------------------------------------------
+6. MISREPRESENTATION
+-------------------------------------------------------------------------------
+
+You may not knowingly publish false or misleading claims regarding:
+
+- authorship;
+- maintainers;
+- licensing;
+- telemetry;
+- security;
+- privacy;
+- benchmarks;
+- vulnerabilities;
+- project history;
+- repository ownership;
+- contributor activity.
+
+Truthful criticism, security research,
+reverse engineering where legally permitted,
+and public technical discussion are always allowed.
+
+-------------------------------------------------------------------------------
+7. CONTRIBUTIONS
+-------------------------------------------------------------------------------
+
+By submitting Contributions to the Project,
+you grant the Project maintainers a perpetual,
+worldwide, royalty-free license to use, modify,
+distribute, and incorporate those Contributions
+into the Project.
+
+You retain ownership of your Contributions.
+
+-------------------------------------------------------------------------------
+8. TRADEMARKS
+-------------------------------------------------------------------------------
+
+This license does not grant rights to use
+the Project's trademarks, branding, logos,
+or visual identity in a misleading manner.
+
+Reasonable nominative use for discussion,
+comparison, tutorials, reviews, or compatibility
+statements is permitted.
+
+-------------------------------------------------------------------------------
+9. TERMINATION
+-------------------------------------------------------------------------------
+
+Any material violation of this license
+automatically terminates the rights granted herein.
+
+Rights may be reinstated if the violation
+is corrected within a reasonable time
+after notice from the copyright holder.
+
+-------------------------------------------------------------------------------
+10. DISCLAIMER OF WARRANTY
+-------------------------------------------------------------------------------
+
+THE SOFTWARE IS PROVIDED "AS IS",
+WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED.
+
+-------------------------------------------------------------------------------
+11. LIMITATION OF LIABILITY
+-------------------------------------------------------------------------------
+
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES, OR LIABILITY
+ARISING FROM THE SOFTWARE OR ITS USE.
