@@ -181,19 +181,71 @@ docker compose up -d
 
 ## Windows
 
-### Десктоп-приложение (рекомендуем)
+<Callout type="info">
+  Самый быстрый способ на Windows — поставить Node.js и запустить через **npx**. Без
+  установщика, без Docker, без WSL.
+</Callout>
 
-В папке `desktop-rs/` исходники нативного десктоп-клиента на Rust (iced).
-Он:
-- ставит Node-пакет автоматически;
-- проводит через визард настройки;
-- открывает дашборд;
-- параллельно поднимает локальный WebUI на `http://127.0.0.1:3000` — открыть с телефона по
-  локалке.
+### Через npx (рекомендуем)
 
-Готовые бинари — на странице [Releases](https://github.com/TheSashaDev/girl-agent/releases).
+<Steps>
 
-Если хочешь собрать самостоятельно:
+<Step>
+
+#### Установи Node.js 22 LTS
+
+Скачай и поставь с [nodejs.org/download](https://nodejs.org/en/download/) — обычный
+`.msi`-инсталлер. Поставь галочку **Add to PATH** при установке.
+
+Проверь в PowerShell:
+
+```powershell
+node --version
+# v22.x.x
+```
+
+</Step>
+
+<Step>
+
+#### Запусти одной командой
+
+```powershell
+npx @thesashadev/girl-agent
+```
+
+Первый раз npm скачает пакет (~30 МБ), потом откроет интерактивный визард прямо в
+PowerShell.
+
+WebUI будет на `http://localhost:3000`.
+
+</Step>
+
+<Step>
+
+#### Хочешь короче — поставь глобально
+
+```powershell
+npm install -g @thesashadev/girl-agent
+girl-agent
+```
+
+Обновление: `npm install -g @thesashadev/girl-agent@latest`.
+
+</Step>
+
+</Steps>
+
+### Десктоп-приложение (нативное)
+
+Если нужен **системный лоток**, автозапуск и нативное окно — есть нативный десктоп-клиент
+на Rust (iced). Скачать готовый бинарь — на странице
+[Releases](https://github.com/TheSashaDev/girl-agent/releases).
+
+Под капотом он ставит тот же Node-пакет, проводит через визард и параллельно поднимает
+локальный WebUI на `http://127.0.0.1:3000`.
+
+Собрать самому (если хочется или нет готового бинаря под твою архитектуру):
 
 ```powershell
 cd desktop-rs
