@@ -54,11 +54,17 @@ rm -rf ~/.local/share/girl-agent ~/.local/bin/girl-agent
   Termux — это Linux-окружение в Android. Можно запустить girl-agent прямо на телефоне.
 </Callout>
 
+<Callout type="warning">
+  Ставь Termux только из F-Droid/GitHub. Версия из Play Store устарела. На Android телефон может
+  убивать фоновые процессы, поэтому для стабильной работы лучше сервер/VPS, а Termux — удобный
+  мобильный вариант.
+</Callout>
+
 <Steps>
 
 <Step>
 
-### Установи Termux
+### Установи чистый Termux
 
 Скачай Termux с [F-Droid](https://f-droid.org/packages/com.termux/) (Play Store-версия
 устарела и не поддерживается).
@@ -67,21 +73,68 @@ rm -rf ~/.local/share/girl-agent ~/.local/bin/girl-agent
 
 <Step>
 
-### Установи Node.js
+### Обнови пакеты
 
 ```bash
-pkg update && pkg upgrade
-pkg install nodejs
+pkg update && pkg upgrade -y
+pkg install -y curl git openssl
 ```
 
 </Step>
 
 <Step>
 
-### Запусти установщик
+### Установи Node.js
+
+Рекомендуемый способ — штатный пакет Termux:
+
+```bash
+pkg install -y nodejs
+node --version
+npm --version
+```
+
+Если `node --version` показывает **20+**, переходи к следующему шагу.
+
+<Callout type="warning">
+  Не используй `nvm` в обычном Termux без необходимости. У Termux есть системная переменная
+  `$PREFIX`, а `nvm` тоже пытается управлять prefix; из-за этого часто появляются ошибки
+  `nvm is not compatible with the "PREFIX" environment variable` или `node: No such file or directory`.
+  Это известная проблема Termux/nvm. `unset PREFIX` может сломать команды Termux в текущей сессии.
+</Callout>
+
+Если в репозитории Termux временно старая Node и очень нужен ручной вариант через `nvm`, делай это
+только как fallback:
+
+```bash
+pkg install -y curl git
+pkg uninstall -y nodejs
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+unset PREFIX
+nvm install 20
+nvm use 20
+node --version
+```
+
+Если `nvm` после этого всё равно ставит бинарник, который не запускается, вернись к штатному
+`pkg install nodejs`. Для обхода сетевых блокировок при скачивании Node иногда нужен VPN.
+
+</Step>
+
+<Step>
+
+### Запусти установщик girl-agent
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TheSashaDev/girl-agent/master/scripts/install.sh | sh
+```
+
+После установки перезапусти shell или добавь `~/.local/bin` в `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 </Step>
@@ -96,6 +149,9 @@ termux-wake-lock
 
 Без этого процесс может умирать при блокировке экрана.
 
+Чтобы Android меньше выгружал процесс: настройки Android → Battery/Аккумулятор → Termux →
+отключи оптимизацию батареи.
+
 </Step>
 
 <Step>
@@ -108,9 +164,36 @@ girl-agent
 
 WebUI откроется на `http://localhost:3000` — открой в браузере **того же телефона**.
 
+Если хочешь открыть WebUI с другого устройства в той же Wi-Fi сети:
+
+```bash
+girl-agent --host=0.0.0.0
+```
+
+Потом открой `http://IP_телефона:3000`.
+
 </Step>
 
 </Steps>
+
+### Быстрая команда для чистого Termux
+
+```bash
+pkg update && pkg upgrade -y
+pkg install -y curl git openssl nodejs
+curl -fsSL https://raw.githubusercontent.com/TheSashaDev/girl-agent/master/scripts/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+termux-wake-lock
+girl-agent
+```
+
+### Частые проблемы Termux
+
+- `girl-agent: command not found` — выполни `export PATH="$HOME/.local/bin:$PATH"` или перезапусти Termux.
+- `EACCES` при глобальной установке npm — не используй `sudo`, в Termux его нет; запускай установщик выше.
+- `Cannot find module`/битая установка — обнови пакеты и переустанови: `pkg update && pkg upgrade -y`, потом повтори install-команду.
+- `fetch failed`/таймауты при установке Node или npm-пакета — включи VPN или смени зеркало Termux через `termux-change-repo`.
+- Процесс умирает при выключенном экране — `termux-wake-lock` и отключение battery optimization для Termux.
 
 ## Если у тебя уже есть Node.js ≥ 18.18
 

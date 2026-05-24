@@ -1,5 +1,6 @@
 import { Bot } from "grammy";
 import path from "node:path";
+import { SocksProxyAgent } from "socks-proxy-agent";
 import type { ProfileConfig } from "../types.js";
 import type { IncomingMedia, IncomingMessage, TgAdapter } from "./index.js";
 import { hasSpoilers, toHtmlWithSpoilers } from "./markdown.js";
@@ -8,7 +9,7 @@ import { normalizeBotReactionEmoji } from "./reactions.js";
 export function makeBotAdapter(cfg: ProfileConfig): TgAdapter {
   const token = cfg.telegram.botToken;
   if (!token) throw new Error("BOT_TOKEN missing");
-  const bot = new Bot(token);
+  const bot = new Bot(token, botConfig(cfg));
   let selfInfo: { username?: string; displayName?: string } = {};
 
   return {
@@ -24,7 +25,9 @@ export function makeBotAdapter(cfg: ProfileConfig): TgAdapter {
           messageId: ctx.message.message_id,
           isPrivate: ctx.chat.type === "private",
           fromName: ctx.from?.first_name,
-          media
+          media,
+          replyTo: botReplyContext(ctx.message as any),
+          forward: botForwardContext(ctx.message as any)
         };
         await onMessage(msg);
       });
@@ -130,6 +133,62 @@ export function makeBotAdapter(cfg: ProfileConfig): TgAdapter {
   };
 }
 
+function botReplyContext(message: any): IncomingMessage["replyTo"] {
+  const reply = message.reply_to_message;
+  if (!reply) return undefined;
+  const text = reply.text ?? reply.caption ?? "";
+  return {
+    messageId: reply.message_id,
+    text: text || undefined,
+    fromId: reply.from?.id,
+    fromName: reply.from?.first_name,
+    media: detectBotMediaSync(reply)
+  };
+}
+
+function botForwardContext(message: any): IncomingMessage["forward"] {
+  const origin = message.forward_origin;
+  if (!origin) return undefined;
+  if (origin.type === "user") {
+    return {
+      fromId: origin.sender_user?.id,
+      fromName: origin.sender_user?.first_name,
+      date: typeof origin.date === "number" ? new Date(origin.date * 1000).toISOString() : undefined
+    };
+  }
+  if (origin.type === "hidden_user") {
+    return {
+      fromName: origin.sender_user_name,
+      date: typeof origin.date === "number" ? new Date(origin.date * 1000).toISOString() : undefined
+    };
+  }
+  if (origin.type === "chat") {
+    return {
+      fromName: origin.sender_chat?.title,
+      date: typeof origin.date === "number" ? new Date(origin.date * 1000).toISOString() : undefined
+    };
+  }
+  if (origin.type === "channel") {
+    return {
+      messageId: origin.message_id,
+      fromName: origin.chat?.title,
+      date: typeof origin.date === "number" ? new Date(origin.date * 1000).toISOString() : undefined
+    };
+  }
+  return undefined;
+}
+
+function detectBotMediaSync(message: any): IncomingMedia | undefined {
+  const caption = message.caption || undefined;
+  if (message.photo) return { kind: "photo", caption, fileId: message.photo.at(-1)?.file_id };
+  if (message.voice) return { kind: "voice", caption, fileId: message.voice.file_id, mimeType: message.voice.mime_type };
+  if (message.video_note) return { kind: "video_note", caption, fileId: message.video_note.file_id };
+  if (message.video) return { kind: "video", caption, fileId: message.video.file_id, mimeType: message.video.mime_type };
+  if (message.sticker) return { kind: "sticker", caption, fileId: message.sticker.file_id, emoji: message.sticker.emoji };
+  if (message.document) return { kind: "document", caption, fileId: message.document.file_id, mimeType: message.document.mime_type };
+  return undefined;
+}
+
 async function detectBotMedia(bot: Bot, token: string, message: any): Promise<IncomingMedia | undefined> {
   if (message.photo?.length) {
     const p = message.photo[message.photo.length - 1];
@@ -169,4 +228,35 @@ function mimeTypeForTelegramPath(filePath: string): string {
   if (ext === ".gif") return "image/gif";
   if (ext === ".webp") return "image/webp";
   return "image/jpeg";
+}
+
+function botConfig(cfg: ProfileConfig): ConstructorParameters<typeof Bot>[1] {
+  const client: NonNullable<ConstructorParameters<typeof Bot>[1]>["client"] = {};
+  const apiRoot = normalizeBotApiRoot(cfg.telegram.botApi?.apiRoot ?? process.env.GIRL_AGENT_BOT_API_ROOT);
+  if (apiRoot) client.apiRoot = apiRoot;
+  const proxy = cfg.telegram.proxy;
+  if (proxy) {
+    if (proxy.MTProxy) {
+      process.stderr.write("[bot] MTProxy не поддерживается Bot API; используй socks5:// или botApi.apiRoot\n");
+    } else {
+      client.baseFetchConfig = {
+        agent: new SocksProxyAgent(botSocksProxyUrl(proxy))
+      } as NonNullable<typeof client.baseFetchConfig>;
+    }
+  }
+  return Object.keys(client).length ? { client } : undefined;
+}
+
+function normalizeBotApiRoot(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  return value.replace(/\/+$/, "");
+}
+
+function botSocksProxyUrl(proxy: NonNullable<ProfileConfig["telegram"]["proxy"]>): string {
+  const proto = proxy.socksType === 4 ? "socks4" : "socks5";
+  const auth = proxy.username
+    ? `${encodeURIComponent(proxy.username)}${proxy.password ? `:${encodeURIComponent(proxy.password)}` : ""}@`
+    : "";
+  return `${proto}://${auth}${proxy.ip}:${proxy.port}`;
 }

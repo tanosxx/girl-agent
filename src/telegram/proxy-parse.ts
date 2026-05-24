@@ -76,3 +76,20 @@ export function parseTelegramProxyInput(
   if (!host || !Number.isInteger(port) || port <= 0) return undefined;
   return { ip: host, port, socksType: 5 };
 }
+
+export function formatTelegramProxy(proxy: TelegramProxyConfig | undefined | null): string {
+  if (!proxy) return "";
+  if (proxy.MTProxy && proxy.secret) {
+    const params = new URLSearchParams({
+      server: proxy.ip,
+      port: String(proxy.port),
+      secret: proxy.secret
+    });
+    return `tg://proxy?${params.toString()}`;
+  }
+  const proto = proxy.socksType === 4 ? "socks4" : "socks5";
+  const auth = proxy.username
+    ? `${encodeURIComponent(proxy.username)}${proxy.password ? `:${encodeURIComponent(proxy.password)}` : ""}@`
+    : "";
+  return `${proto}://${auth}${proxy.ip}:${proxy.port}`;
+}

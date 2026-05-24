@@ -20,6 +20,7 @@ export function App() {
   const tab = useStore(s => s.tab);
   const showSetup = useStore(s => s.showSetup);
   const sidebarOpen = useStore(s => s.sidebarOpen);
+  const setSidebar = useStore(s => s.setSidebar);
   const init = useStore(s => s.init);
 
   useEffect(() => { void init(); }, [init]);
@@ -35,6 +36,12 @@ export function App() {
   return (
     <AuthGate>
       <div className="app-shell">
+        <button
+          className="sidebar-backdrop"
+          data-open={sidebarOpen}
+          aria-label="закрыть меню"
+          onClick={() => setSidebar(false)}
+        />
         <aside className="sidebar" data-open={sidebarOpen}>
           <Sidebar />
         </aside>

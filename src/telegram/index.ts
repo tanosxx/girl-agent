@@ -8,6 +8,8 @@ export interface IncomingMessage {
   isPrivate: boolean;
   fromName?: string;
   media?: IncomingMedia;
+  replyTo?: IncomingMessageContext;
+  forward?: IncomingForwardContext;
   /**
    * Если сообщение — это реакция-эмодзи юзера на её сообщение (Issue #76).
    * `text` в этом случае пустой, вместо этого заполнен emojiReaction.
@@ -32,6 +34,18 @@ export interface IncomingMessage {
     /** Как давно было исходное сообщение (в секундах на момент удаления). */
     ageSec: number;
   };
+}
+
+export interface IncomingMessageContext {
+  messageId?: number;
+  text?: string;
+  fromId?: number;
+  fromName?: string;
+  media?: IncomingMedia;
+}
+
+export interface IncomingForwardContext extends IncomingMessageContext {
+  date?: string;
 }
 
 export type IncomingMediaKind = "photo" | "video" | "voice" | "video_note" | "sticker" | "document";

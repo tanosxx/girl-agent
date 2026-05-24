@@ -43,8 +43,7 @@ export function decideOnlineHeartbeat(
     return { online: false, nextTickSec: 90, reason: "recent-send (natural online)" };
   }
 
-  // computePresenceState использует Math.random для onlineProb,
-  // поэтому каждый вызов «бросает кубик» паттерна — то что нужно для heartbeat.
+  // computePresenceState использует Math.random для onlineProb.
   const state = computePresenceState(
     cfg, profile,
     /*lastUserMsgTs=*/0,
@@ -66,8 +65,8 @@ export function decideOnlineHeartbeat(
   }
 
   if (state.online) {
-    // «висит» в тг минимум 45-150с прежде чем снова решать
-    const sec = 45 + Math.floor(Math.random() * 105);
+    // Держим одно реальное окно, потом даём шанс уйти офлайн.
+    const sec = Math.max(45, Math.min(150, Math.round(profile.onlineWindowMin * 60)));
     return { online: true, nextTickSec: sec, reason: `presence-online (${profile.pattern})` };
   }
 

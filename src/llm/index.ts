@@ -272,9 +272,48 @@ class AnthropicLike implements LLMClient {
     const res = await this.client.messages.create(params).catch(error => {
       throw enrichAnthropicError(error, this.cfg.baseURL);
     });
-    const block = res.content.find(c => c.type === "text");
-    return block && "text" in block ? block.text.trim() : "";
+    return anthropicResponseText(res);
   }
+}
+
+function anthropicResponseText(res: unknown): string {
+  if (!isRecord(res)) return "";
+  const content = res.content;
+  if (Array.isArray(content)) {
+    const blocks = content
+      .map(block => isRecord(block) && typeof block.text === "string" ? block.text : "")
+      .filter(Boolean);
+    return blocks.join("\n").trim();
+  }
+  if (typeof content === "string") return content.trim();
+  const fallback = openAIStyleResponseText(res) || stringField(res, "output_text") || stringField(res, "text");
+  return fallback.trim();
+}
+
+function openAIStyleResponseText(res: unknown): string {
+  if (!isRecord(res) || !Array.isArray(res.choices)) return "";
+  const first = res.choices[0];
+  if (!isRecord(first)) return "";
+  const message = first.message;
+  if (!isRecord(message)) return "";
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map(part => isRecord(part) && typeof part.text === "string" ? part.text : "")
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === "string" ? value : "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function contentToText(content: ChatContent): string {
@@ -433,7 +472,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error ?? "");
 }
 
-export function makeLLM(cfg: ProfileConfig["llm"]): LLMClient {
+export function makeLLM(cfg: ProfileConfig["llm"] | NonNullable<ProfileConfig["minorLlm"]>): LLMClient {
   const inner = cfg.proto === "anthropic" ? new AnthropicLike(cfg) : new OpenAILike(cfg);
   return new SerializedLLMClient(inner);
 }

@@ -147,8 +147,9 @@ a:hover { text-decoration: underline; }
 
 @media (max-width: 720px) {
   .app-shell { grid-template-columns: 1fr; grid-template-rows: 56px 1fr; }
-  .sidebar { position: fixed; left: 0; top: 56px; height: calc(100vh - 56px); z-index: 100; transform: translateX(-100%); transition: transform 0.4s var(--ga-spring); width: 280px; }
-  .sidebar[data-open="true"] { transform: translateX(0); }
+  .sidebar { position: fixed; left: 0; top: 56px; height: calc(100dvh - 56px); z-index: 100; transform: translateX(-100%); transition: transform 0.4s var(--ga-spring); width: min(82vw, 280px); pointer-events: none; }
+  .sidebar[data-open="true"] { transform: translateX(0); pointer-events: auto; }
+  .sidebar-backdrop[data-open="true"] { display: block; }
 }
 
 .sidebar {
@@ -161,6 +162,16 @@ a:hover { text-decoration: underline; }
   border-right: 1px solid var(--ga-border);
   overflow-y: auto;
   gap: 14px;
+}
+
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 56px 0 0 0;
+  z-index: 90;
+  border: 0;
+  padding: 0;
+  background: rgba(15, 15, 18, 0.35);
 }
 
 .sidebar-brand {
@@ -291,6 +302,8 @@ a:hover { text-decoration: underline; }
   display: none;
   background: transparent; color: var(--ga-text);
   width: 36px; height: 36px; border-radius: 10px;
+  touch-action: manipulation;
+  cursor: pointer;
 }
 @media (max-width: 720px) {
   .menu-button { display: inline-flex; align-items: center; justify-content: center; }

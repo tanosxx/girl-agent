@@ -23,6 +23,7 @@ export function Topbar() {
   const refreshActive = useStore(s => s.refreshActive);
   const toast = useStore(s => s.toast);
   const [busy, setBusy] = useState(false);
+  const toggleSidebar = () => setSidebar(!sidebarOpen);
 
   const active = profiles.find(p => p.slug === activeSlug) ?? null;
 
@@ -46,7 +47,16 @@ export function Topbar() {
 
   return (
     <div className="topbar">
-      <button className="menu-button" onClick={() => setSidebar(!sidebarOpen)} aria-label="меню">≡</button>
+      <button
+        className="menu-button"
+        type="button"
+        onPointerDown={(e) => {
+          e.preventDefault();
+          toggleSidebar();
+        }}
+        onClick={toggleSidebar}
+        aria-label="меню"
+      >≡</button>
       <div>
         <div className="title">{TAB_TITLES[tab] ?? "girl-agent"}</div>
         {activeConfig && <div className="crumb">{activeConfig.name} · {activeConfig.age} · {activeConfig.mode}</div>}

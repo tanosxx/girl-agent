@@ -89,6 +89,8 @@ export function ConfigurationPage() {
   }
 
   const llmPreset = llmPresets.find(p => p.id === merged.llm.presetId);
+  const minor = merged.minorLlm ?? { enabled: false, sameAsMain: true, presetId: merged.llm.presetId, proto: merged.llm.proto, baseURL: merged.llm.baseURL, apiKey: merged.llm.apiKey, model: merged.llm.model };
+  const minorPreset = llmPresets.find(p => p.id === minor.presetId);
 
   return (
     <div className="grid" style={{ gap: 16, maxWidth: 920 }}>
@@ -135,10 +137,17 @@ export function ConfigurationPage() {
             : "Userbot подключается под обычный TG-аккаунт. Может писать всем по username/телефону. Используй на своём аккаунте."}</div>
         </div>
         {merged.mode === "bot" ? (
-          <div className="form-row">
-            <label>Bot Token</label>
-            <input className="input" type="password" value={merged.telegram.botToken ?? ""} onChange={e => pfDeep("telegram.botToken", e.target.value)} placeholder="123456789:AAFxxxxxxxxx" />
-            <div className="hint">Получи у <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> командой /newbot</div>
+          <div className="grid cols-2">
+            <div className="form-row">
+              <label>Bot Token</label>
+              <input className="input" type="password" value={merged.telegram.botToken ?? ""} onChange={e => pfDeep("telegram.botToken", e.target.value)} placeholder="123456789:AAFxxxxxxxxx" />
+              <div className="hint">Получи у <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> командой /newbot</div>
+            </div>
+            <div className="form-row">
+              <label>Bot API endpoint (опционально)</label>
+              <input className="input" value={merged.telegram.botApi?.apiRoot ?? ""} onChange={e => pfDeep("telegram.botApi", { ...(merged.telegram.botApi ?? {}), apiRoot: e.target.value || undefined })} placeholder="https://api.telegram.org или свой reverse proxy" />
+              <div className="hint">Для Bot API прокси/локального сервера. Можно оставить пустым.</div>
+            </div>
           </div>
         ) : (
           <div className="grid cols-2">
@@ -222,6 +231,66 @@ export function ConfigurationPage() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div className="h-title">Minor LLM</div>
+          <div className="h-meta">дешёвая модель для проверок и служебных задач</div>
+        </div>
+        <div className="form-row">
+          <label className="toggle">
+            <input type="checkbox" checked={minor.enabled} onChange={e => pf("minorLlm", { ...minor, enabled: e.target.checked })} />
+            <span className="track"><span className="knob" /></span>
+            <span>Использовать minor model</span>
+          </label>
+          <div className="hint">Основная модель продолжает писать сообщения, agenda и persona. Minor сейчас используется для проверки ответа перед отправкой.</div>
+        </div>
+        {minor.enabled && (
+          <>
+            <div className="form-row">
+              <label className="toggle">
+                <input type="checkbox" checked={minor.sameAsMain !== false} onChange={e => pf("minorLlm", { ...minor, sameAsMain: e.target.checked })} />
+                <span className="track"><span className="knob" /></span>
+                <span>Такая же как основная</span>
+              </label>
+            </div>
+            {minor.sameAsMain === false && (
+              <div className="grid cols-2">
+                <div className="form-row">
+                  <label>Провайдер minor</label>
+                  <select className="select" value={minor.presetId} onChange={e => {
+                    const id = e.target.value;
+                    const p = llmPresets.find(x => x.id === id);
+                    if (p && !p.disabled) pf("minorLlm", { ...minor, enabled: true, sameAsMain: false, presetId: p.id, proto: p.proto, baseURL: p.baseURL, apiKey: minor.apiKey ?? "", model: p.defaultModel });
+                  }}>
+                    {llmPresets.map(p => <option key={p.id} value={p.id} disabled={p.disabled}>{p.name}{p.disabled ? ` — ${p.disabledReason ?? "недоступен"}` : ""}</option>)}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>Модель minor</label>
+                  {minorPreset?.models?.length ? (
+                    <select className="select" value={minor.model} onChange={e => pf("minorLlm", { ...minor, model: e.target.value })}>
+                      {minorPreset.models.map(m => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  ) : (
+                    <input className="input" value={minor.model} onChange={e => pf("minorLlm", { ...minor, model: e.target.value })} placeholder="название модели" />
+                  )}
+                </div>
+                {minorPreset?.apiKeyRequired !== false && (
+                  <div className="form-row">
+                    <label>API Key minor</label>
+                    <input className="input" type="password" value={minor.apiKey ?? ""} onChange={e => pf("minorLlm", { ...minor, apiKey: e.target.value })} />
+                  </div>
+                )}
+                <div className="form-row">
+                  <label>Base URL minor</label>
+                  <input className="input" value={minor.baseURL ?? ""} onChange={e => pf("minorLlm", { ...minor, baseURL: e.target.value || undefined })} placeholder={minorPreset?.baseURL ?? "https://..."} />
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <div className="card">

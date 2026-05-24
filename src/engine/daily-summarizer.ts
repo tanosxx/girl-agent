@@ -5,7 +5,7 @@ import type { LLMClient } from "../llm/index.js";
 import type { ProfileConfig } from "../types.js";
 import {
   readSessionLog, writeDailySummary, readDailySummary,
-  listSessionDays, sessionDate
+  listSessionDays, sessionDate, stripLogMetadata
 } from "../storage/md.js";
 import { mineDailyLogToPalace } from "./memory-palace.js";
 
@@ -28,7 +28,7 @@ export async function buildDailySummary(
   cfg: ProfileConfig,
   day: string
 ): Promise<DailySummary | null> {
-  const log = await readSessionLog(cfg.slug, day);
+  const log = sanitizeSessionLogForSummary(await readSessionLog(cfg.slug, day));
   if (!log || log.length < 50) return null;
 
   try {
@@ -71,6 +71,10 @@ ${log.slice(-8000)}
   } catch {
     return null;
   }
+}
+
+function sanitizeSessionLogForSummary(raw: string): string {
+  return raw.split(/\r?\n/).map(stripLogMetadata).join("\n").trim();
 }
 
 function renderSummary(s: DailySummary): string {

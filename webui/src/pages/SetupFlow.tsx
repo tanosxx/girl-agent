@@ -17,6 +17,7 @@ interface DraftState {
   tz: string;
   tgMode: "bot" | "userbot";
   botToken: string;
+  botApiRoot: string;
   // userbot
   userbotMethod: "proxy" | "own";
   apiId: string;
@@ -34,6 +35,12 @@ interface DraftState {
   llmModel: string;
   llmApiKey: string;
   llmBaseURL: string;
+  minorEnabled: boolean;
+  minorSameAsMain: boolean;
+  minorPresetId: string;
+  minorModel: string;
+  minorApiKey: string;
+  minorBaseURL: string;
   // misc
   stage: string;
   communicationId: string;
@@ -62,6 +69,7 @@ const defaultDraft = (): DraftState => ({
   tz: "Europe/Kyiv",
   tgMode: "bot",
   botToken: "",
+  botApiRoot: "",
   userbotMethod: "proxy",
   apiId: "",
   apiHash: "",
@@ -73,6 +81,12 @@ const defaultDraft = (): DraftState => ({
   llmModel: "claude-sonnet-4.6",
   llmApiKey: "",
   llmBaseURL: "",
+  minorEnabled: false,
+  minorSameAsMain: true,
+  minorPresetId: "claudehub",
+  minorModel: "claude-haiku-4.5",
+  minorApiKey: "",
+  minorBaseURL: "",
   stage: "tg-given-cold",
   communicationId: "normal",
   ignoreTendency: 35,
@@ -315,9 +329,10 @@ export function SetupFlow() {
     setSavingProfile(true);
     try {
       const llmPreset = llmPresets.find(p => p.id === d.llmPresetId);
+      const minorPreset = llmPresets.find(p => p.id === d.minorPresetId);
       const comm = comms.find(c => c.id === d.communicationId);
       const tgConfig: ProfileConfig["telegram"] = d.tgMode === "bot"
-        ? { botToken: d.botToken, useWSS: true, proxy: d.proxy || undefined }
+        ? { botToken: d.botToken, useWSS: true, proxy: d.proxy || undefined, botApi: d.botApiRoot ? { apiRoot: d.botApiRoot } : undefined }
         : {
             apiId: d.apiId ? Number(d.apiId) : undefined,
             apiHash: d.apiHash || undefined,
@@ -348,7 +363,16 @@ export function SetupFlow() {
           baseURL: d.llmBaseURL || llmPreset?.baseURL,
           model: d.llmModel || llmPreset?.defaultModel || "",
           apiKey: d.llmApiKey
-        }
+        },
+        minorLlm: d.minorEnabled ? {
+          enabled: true,
+          sameAsMain: d.minorSameAsMain,
+          presetId: d.minorSameAsMain ? d.llmPresetId : d.minorPresetId,
+          proto: d.minorSameAsMain ? (llmPreset?.proto ?? "openai") : (minorPreset?.proto ?? "openai"),
+          baseURL: d.minorSameAsMain ? (d.llmBaseURL || llmPreset?.baseURL) : (d.minorBaseURL || minorPreset?.baseURL),
+          model: d.minorSameAsMain ? (d.llmModel || llmPreset?.defaultModel || "") : (d.minorModel || minorPreset?.defaultModel || ""),
+          apiKey: d.minorSameAsMain ? d.llmApiKey : d.minorApiKey
+        } : undefined
       };
       const r = await api.createProfile(data);
       return r.config;
@@ -541,6 +565,11 @@ export function SetupFlow() {
                 </div>
               </div>
             )}
+            <div className="form-row">
+              <label>Прокси (опционально)</label>
+              <input className="input" value={d.proxy} onChange={e => set("proxy", e.target.value)} placeholder="socks5://user:pass@host:port или tg://proxy?..." />
+              <div className="hint">SOCKS работает для bot/userbot, MTProxy — только для userbot.</div>
+            </div>
           </>
         )}
 
@@ -563,13 +592,20 @@ export function SetupFlow() {
               </div>
             </div>
             {d.tgMode === "bot" ? (
-              <div className="form-row">
-                <label>Bot Token</label>
-                <input className="input" type="password" value={d.botToken} onChange={e => set("botToken", e.target.value)} placeholder="123456789:AAFxxxxxxxxx" />
-                <div className="hint">
-                  1. Открой <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a><br />
-                  2. Команда /newbot, придумай имя и username<br />
-                  3. Скопируй токен сюда
+              <div className="grid cols-2">
+                <div className="form-row">
+                  <label>Bot Token</label>
+                  <input className="input" type="password" value={d.botToken} onChange={e => set("botToken", e.target.value)} placeholder="123456789:AAFxxxxxxxxx" />
+                  <div className="hint">
+                    1. Открой <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a><br />
+                    2. Команда /newbot, придумай имя и username<br />
+                    3. Скопируй токен сюда
+                  </div>
+                </div>
+                <div className="form-row">
+                  <label>Bot API endpoint (опционально)</label>
+                  <input className="input" value={d.botApiRoot} onChange={e => set("botApiRoot", e.target.value)} placeholder="https://api.telegram.org или свой reverse proxy" />
+                  <div className="hint">Если Telegram Bot API заблокирован — укажи свой proxy/local Bot API endpoint.</div>
                 </div>
               </div>
             ) : (
@@ -689,6 +725,55 @@ export function SetupFlow() {
                 <label>Base URL</label>
                 <input className="input" value={d.llmBaseURL} onChange={e => set("llmBaseURL", e.target.value)} placeholder="https://..." />
               </div>
+            )}
+            <div className="form-row">
+              <label className="toggle">
+                <input type="checkbox" checked={d.minorEnabled} onChange={e => set("minorEnabled", e.target.checked)} />
+                <span className="track"><span className="knob" /></span>
+                <span>Добавить minor model для служебных проверок</span>
+              </label>
+              <div className="hint">Экономит баланс основной модели: проверки ответов можно делать дешёвой моделью.</div>
+            </div>
+            {d.minorEnabled && (
+              <>
+                <div className="form-row">
+                  <label className="toggle">
+                    <input type="checkbox" checked={d.minorSameAsMain} onChange={e => set("minorSameAsMain", e.target.checked)} />
+                    <span className="track"><span className="knob" /></span>
+                    <span>Minor такая же как основная</span>
+                  </label>
+                </div>
+                {!d.minorSameAsMain && (
+                  <div className="grid cols-2">
+                    <div className="form-row">
+                      <label>Minor provider</label>
+                      <select className="select" value={d.minorPresetId} onChange={e => {
+                        const p = llmPresets.find(x => x.id === e.target.value);
+                        if (p && !p.disabled) patch({ minorPresetId: p.id, minorModel: p.defaultModel, minorBaseURL: p.baseURL ?? "" });
+                      }}>
+                        {llmPresets.map(p => <option key={p.id} value={p.id} disabled={p.disabled}>{p.name}{p.disabled ? ` — ${p.disabledReason ?? "недоступен"}` : ""}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-row">
+                      <label>Minor model</label>
+                      {(() => {
+                        const p = llmPresets.find(x => x.id === d.minorPresetId);
+                        return p?.models?.length
+                          ? <select className="select" value={d.minorModel} onChange={e => set("minorModel", e.target.value)}>{p.models.map(m => <option key={m} value={m}>{m}</option>)}</select>
+                          : <input className="input" value={d.minorModel} onChange={e => set("minorModel", e.target.value)} />;
+                      })()}
+                    </div>
+                    <div className="form-row">
+                      <label>Minor API Key</label>
+                      <input className="input" type="password" value={d.minorApiKey} onChange={e => set("minorApiKey", e.target.value)} />
+                    </div>
+                    <div className="form-row">
+                      <label>Minor Base URL</label>
+                      <input className="input" value={d.minorBaseURL} onChange={e => set("minorBaseURL", e.target.value)} placeholder={llmPresets.find(p => p.id === d.minorPresetId)?.baseURL ?? "https://..."} />
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

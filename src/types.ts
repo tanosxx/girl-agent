@@ -17,6 +17,11 @@ export interface TelegramProxyConfig {
   timeout?: number;
 }
 
+export interface BotApiConfig {
+  /** Custom Telegram Bot API root, e.g. reverse proxy or local Bot API server. */
+  apiRoot?: string;
+}
+
 export interface LLMPreset {
   id: string;
   name: string;
@@ -121,6 +126,15 @@ export interface ProfileConfig {
     /** Unix ms when the current access token expires */
     oauthExpiresAt?: number;
   };
+  minorLlm?: {
+    enabled: boolean;
+    sameAsMain?: boolean;
+    presetId: string;
+    proto: LLMProto;
+    baseURL?: string;
+    apiKey: string;
+    model: string;
+  };
   telegram: {
     botToken?: string;
     apiId?: number;
@@ -129,8 +143,10 @@ export interface ProfileConfig {
     phone?: string;
     /** Использовать WebSocket через порт 443 вместо TCP на порту 80. Обходит блокировки РФ. По умолчанию true (auto). */
     useWSS?: boolean;
-    /** SOCKS proxy for MTProto userbot mode. Можно задать через GIRL_AGENT_TG_PROXY=socks5://user:pass@host:port. */
+    /** SOCKS proxy for MTProto userbot mode and Bot API mode. */
     proxy?: TelegramProxyConfig;
+    /** Настройки Bot API: кастомный endpoint/реверс-прокси. */
+    botApi?: BotApiConfig;
   };
   /** @deprecated MCP настройки скрыты из UI; внешние расширения ставятся через addons. */
   mcp?: { id: string; secrets: Record<string, string> }[];

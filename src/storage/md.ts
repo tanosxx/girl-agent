@@ -246,8 +246,9 @@ export function sessionDate(tz: string, now = new Date()): string {
 /** Аппенд в session-aware дневник. Используй вместо appendDayLog. */
 export async function appendSessionLog(slug: string, tz: string, line: string, fromId?: number): Promise<void> {
   const day = sessionDate(tz);
-  const suffix = fromId ? ` <!--from:${fromId}-->` : "";
-  await appendMd(slug, `log/${day}.md`, line + suffix + "\n");
+  const suffix = fromId ? ` ${fromMarker(fromId)}` : "";
+  const safeLine = stripLogMetadata(line);
+  await appendMd(slug, `log/${day}.md`, safeLine + suffix + "\n");
 }
 
 export async function appendSharedMemory(slug: string, tz: string, fromId: number, text: string): Promise<void> {
@@ -263,13 +264,13 @@ export async function appendSharedMemory(slug: string, tz: string, fromId: numbe
 
 export async function readSharedMemory(slug: string, limit = 40): Promise<string> {
   const raw = await readMd(slug, "memory/shared-cross-chat.md");
-  return raw.split(/\r?\n/).filter(Boolean).slice(-limit).join("\n");
+  return raw.split(/\r?\n/).map(stripLogMetadata).filter(Boolean).slice(-limit).join("\n");
 }
 
 export async function searchSharedMemory(slug: string, query: string, limit = 8): Promise<string> {
   const raw = await readMd(slug, "memory/shared-cross-chat.md");
   const tokens = query.toLowerCase().split(/\s+/).filter(t => t.length >= 3);
-  const lines = raw.split(/\r?\n/).filter(Boolean);
+  const lines = raw.split(/\r?\n/).map(stripLogMetadata).filter(Boolean);
   const hits = tokens.length
     ? lines.filter(line => tokens.some(t => line.toLowerCase().includes(t)))
     : [];
@@ -290,7 +291,7 @@ export async function listSessionDays(slug: string): Promise<string[]> {
 
 /** Daily summary (генерится по итогам сессии) */
 export async function readDailySummary(slug: string, day: string): Promise<string> {
-  return readMd(slug, `memory/daily/${day}.md`);
+  return stripLogMetadata(await readMd(slug, `memory/daily/${day}.md`));
 }
 
 export async function writeDailySummary(slug: string, day: string, content: string): Promise<void> {
@@ -316,7 +317,7 @@ export async function searchDailySummaries(slug: string, query: string, limit = 
   if (!tokens.length) return [];
   const out: { day: string; excerpt: string; score: number }[] = [];
   for (const day of days) {
-    const txt = (await readDailySummary(slug, day)).toLowerCase();
+    const txt = stripLogMetadata(await readDailySummary(slug, day)).toLowerCase();
     if (!txt) continue;
     let score = 0;
     for (const t of tokens) {
@@ -342,20 +343,35 @@ export function parseSessionLogTurns(raw: string, fromId?: number, limit = 30): 
   const turns: StoredConversationTurn[] = [];
   let currentChatMatches = fromId == null;
   for (const line of raw.split(/\r?\n/)) {
-    const user = line.match(/^\[(.+?)\]\s+он\((\d+)\):\s*(.*)$/);
+    const clean = stripLogMetadata(line);
+    const user = clean.match(/^\[(.+?)\]\s+он\((\d+)\):\s*(.*)$/);
     if (user) {
       currentChatMatches = fromId == null || Number(user[2]) === fromId;
       if (currentChatMatches) {
-        turns.push({ role: "user", content: user[3] ?? "", ts: Date.parse(user[1] ?? "") || undefined, fromId: Number(user[2]) });
+        turns.push({ role: "user", content: stripLogMetadata(user[3] ?? ""), ts: Date.parse(user[1] ?? "") || undefined, fromId: Number(user[2]) });
       }
       continue;
     }
-    const assistant = line.match(/^\s*->\s+(?:\[proactive\]\s+)?она:\s*(.*)$/);
+    const assistant = clean.match(/^\s*->\s+(?:\[proactive\]\s+)?она:\s*(.*)$/);
     if (assistant && currentChatMatches) {
-      turns.push({ role: "assistant", content: assistant[1] ?? "" });
+      turns.push({ role: "assistant", content: stripLogMetadata(assistant[1] ?? "") });
     }
   }
   return turns.slice(-limit);
+}
+
+export function stripLogMetadata(text: string): string {
+  return text
+    .replace(/\s*<+\s*!+\s*-{2,}\s*from\s*:\s*(?:\d+|TGIDUSER)\s*-{2,}\s*>+\s*/gi, "")
+    .replace(/\s*‹+\s*!+\s*-{2,}\s*from\s*:\s*(?:\d+|TGIDUSER)\s*-{2,}\s*›+\s*/gi, "")
+    .replace(/\s*&lt;\s*!+\s*-{2,}\s*from\s*:\s*(?:\d+|TGIDUSER)\s*-{2,}\s*&gt;\s*/gi, "")
+    .replace(/\s*<!--[\s\S]*?-->\s*/g, "")
+    .replace(/\s*‹!?--[\s\S]*?--›\s*/g, "")
+    .trimEnd();
+}
+
+function fromMarker(fromId: number): string {
+  return `<${"!"}--from:${fromId}-->`;
 }
 
 export async function readRecentSessionTurns(slug: string, tz: string, fromId?: number, limit = 30): Promise<StoredConversationTurn[]> {

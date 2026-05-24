@@ -10,6 +10,8 @@ export interface LLMUpdate {
   proto?: LLMProto;
 }
 
+export type LLMConfig = ProfileConfig["llm"] | NonNullable<ProfileConfig["minorLlm"]>;
+
 export function describeLLM(cfg: ProfileConfig): string {
   const preset = findPreset(cfg.llm.presetId);
   const auth = cfg.llm.oauthRefreshToken
@@ -25,6 +27,18 @@ export function describeLLM(cfg: ProfileConfig): string {
     `baseURL: ${cfg.llm.baseURL ?? "default"}`,
     `auth: ${auth}`
   ].join("\n");
+}
+
+export function minorLLMConfig(cfg: ProfileConfig): ProfileConfig["llm"] {
+  const minor = cfg.minorLlm;
+  if (!minor?.enabled || minor.sameAsMain) return cfg.llm;
+  return {
+    presetId: minor.presetId,
+    proto: minor.proto,
+    baseURL: minor.baseURL,
+    apiKey: minor.apiKey,
+    model: minor.model
+  };
 }
 
 export function applyLLMUpdate(cfg: ProfileConfig, update: LLMUpdate): string[] {
@@ -81,6 +95,27 @@ export function applyLLMUpdate(cfg: ProfileConfig, update: LLMUpdate): string[] 
   };
 
   return changed;
+}
+
+export function resolveLLMUpdate(current: LLMConfig, update: LLMUpdate): { next: LLMConfig; changed: string[] } {
+  const shell: ProfileConfig = {
+    slug: "",
+    name: "",
+    age: 18,
+    nationality: "RU",
+    tz: "UTC",
+    mode: "bot",
+    stage: "tg-given-cold",
+    telegram: {},
+    privacy: "owner-only",
+    createdAt: "",
+    sleepFrom: 23,
+    sleepTo: 8,
+    nightWakeChance: 0.05,
+    llm: current
+  };
+  const changed = applyLLMUpdate(shell, update);
+  return { next: shell.llm as LLMConfig, changed };
 }
 
 function emptyToUndefined(value: string): string | undefined {

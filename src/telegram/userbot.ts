@@ -1,7 +1,7 @@
 import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import type { ProfileConfig } from "../types.js";
-import type { IncomingMedia, TgAdapter } from "./index.js";
+import type { IncomingForwardContext, IncomingMedia, IncomingMessageContext, TgAdapter } from "./index.js";
 import { NewMessage } from "telegram/events/index.js";
 import { Raw } from "telegram/events/Raw.js";
 import type { ProxyInterface } from "telegram/network/connection/TCPMTProxy.js";
@@ -119,7 +119,7 @@ export function makeUserbotAdapter(cfg: ProfileConfig): TgAdapter {
       // Кэш последних входящих сообщений по (chatId, messageId) — нужен для Task #15:
       // когда юзер удаляет сообщение, в raw update приходят только id, текст нужно
       // восстановить из хранимых буфера.
-      const incomingCache = new Map<string, { text: string; ts: number; chatId: number | string; isPrivate: boolean; fromId: number; fromName?: string }>();
+      const incomingCache = new Map<string, { text: string; ts: number; chatId: number | string; isPrivate: boolean; fromId: number; fromName?: string; media?: IncomingMedia }>();
       const cacheKey = (chatId: number | string, messageId: number): string => `${chatId}:${messageId}`;
       const trimIncomingCache = (): void => {
         if (incomingCache.size <= 256) return;
@@ -145,6 +145,8 @@ export function makeUserbotAdapter(cfg: ProfileConfig): TgAdapter {
           if (isPrivate && inputChat && fromId > 0) {
             peerCache.set(fromId, inputChat);
           }
+          const replyTo = await userbotReplyContext(m);
+          const forward = userbotForwardContext(m);
           // Кэшируем для Task #15 (deletion handler).
           incomingCache.set(cacheKey(chatId, Number(m.id)), {
             text,
@@ -152,7 +154,8 @@ export function makeUserbotAdapter(cfg: ProfileConfig): TgAdapter {
             chatId,
             isPrivate,
             fromId,
-            fromName: undefined
+            fromName: undefined,
+            media
           });
           trimIncomingCache();
           await onMessage({
@@ -161,7 +164,9 @@ export function makeUserbotAdapter(cfg: ProfileConfig): TgAdapter {
             chatId,
             messageId: Number(m.id),
             isPrivate,
-            media
+            media,
+            replyTo,
+            forward
           });
         } catch {
           /* ignore per-message errors so the update loop survives */
@@ -362,7 +367,46 @@ export async function userbotLogin(opts: {
   return sess;
 }
 
-async function detectUserbotMedia(client: TelegramClient, message: any): Promise<IncomingMedia | undefined> {
+async function userbotReplyContext(message: {
+  replyToMsgId?: number;
+  getReplyMessage?: () => Promise<Api.Message | undefined>;
+}): Promise<IncomingMessageContext | undefined> {
+  const messageId = message.replyToMsgId;
+  if (!messageId) return undefined;
+  try {
+    const reply = await message.getReplyMessage?.();
+    if (!reply) return { messageId };
+    const media = await detectUserbotMedia(undefined, reply);
+    const text = reply.message ?? "";
+    return {
+      messageId,
+      text: text || undefined,
+      fromId: peerUserId(reply.fromId),
+      fromName: typeof reply.postAuthor === "string" ? reply.postAuthor : undefined,
+      media
+    };
+  } catch {
+    return { messageId };
+  }
+}
+
+function userbotForwardContext(message: { fwdFrom?: Api.TypeMessageFwdHeader }): IncomingForwardContext | undefined {
+  const fwd = message.fwdFrom;
+  if (!fwd) return undefined;
+  const date = fwd.date;
+  return {
+    fromId: peerUserId(fwd.fromId),
+    fromName: fwd.fromName,
+    date: typeof date === "number" ? new Date(date * 1000).toISOString() : undefined
+  };
+}
+
+function peerUserId(peer: Api.TypePeer | undefined): number | undefined {
+  if (!peer || peer.className !== "PeerUser") return undefined;
+  return Number(peer.userId);
+}
+
+async function detectUserbotMedia(client: TelegramClient | undefined, message: any): Promise<IncomingMedia | undefined> {
   const media = message.media;
   if (!media) return undefined;
   const cn = media.className ?? media.constructor?.name ?? "";
@@ -370,7 +414,7 @@ async function detectUserbotMedia(client: TelegramClient, message: any): Promise
   if (cn.includes("MessageMediaPhoto") || message.photo) {
     const out: IncomingMedia = { kind: "photo", caption, mimeType: "image/jpeg" };
     try {
-      const downloaded = await client.downloadMedia(message, {});
+      const downloaded = client ? await client.downloadMedia(message, {}) : undefined;
       if (Buffer.isBuffer(downloaded)) out.base64 = downloaded.toString("base64");
     } catch { /* ignore media download failures */ }
     return out;
@@ -390,7 +434,7 @@ async function detectUserbotMedia(client: TelegramClient, message: any): Promise
       const out: IncomingMedia = { kind: "sticker", caption, mimeType, emoji: stickerAttr?.alt };
       if (mimeType?.startsWith("image/")) {
         try {
-          const downloaded = await client.downloadMedia(message, {});
+          const downloaded = client ? await client.downloadMedia(message, {}) : undefined;
           if (Buffer.isBuffer(downloaded)) out.base64 = downloaded.toString("base64");
         } catch { /* ignore media download failures */ }
       }

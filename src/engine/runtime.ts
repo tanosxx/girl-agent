@@ -6,7 +6,7 @@ import { behaviorTick } from "./behavior-tick.js";
 import { applyMoodDelta, maybeReflect } from "./reflect.js";
 import {
   appendSessionLog, appendSharedMemory, readRelationship, writeRelationship, writeConfig, writeMd,
-  readAgenda, writeAgenda, readRecentSessionTurns, readMd, sessionDate, normalizeOwnerId, profileDir
+  readAgenda, writeAgenda, readRecentSessionTurns, readMd, sessionDate, normalizeOwnerId, profileDir, stripLogMetadata
 } from "../storage/md.js";
 import { findStage } from "../presets/stages.js";
 import { communicationProfileLabel, normalizeCommunicationProfile } from "../presets/communication.js";
@@ -23,10 +23,10 @@ import { closeCurrentSession, closeStaleSessions } from "./daily-summarizer.js";
 import { loadRealismContext, maybeAdvanceRelationshipTimeline, recordInteractionMemory } from "./realism.js";
 import { mineUnminedDailyLogs } from "./memory-palace.js";
 import { describeIncomingMedia, imagePartFromMedia, memeDetectionInstruction } from "./media.js";
-import { looksLikeJailbreak, sanitizeModelReply, silentErrorLabel } from "./security.js";
+import { looksLikeJailbreak, looksLikeMetaIdentityLeak, sanitizeModelReply, silentErrorLabel } from "./security.js";
 import { addStickerToLibrary, pickSticker } from "./stickers.js";
 import { EventEmitter } from "node:events";
-import { applyLLMUpdate, describeLLM } from "../config/llm-update.js";
+import { applyLLMUpdate, describeLLM, minorLLMConfig } from "../config/llm-update.js";
 import { injectTypos, pickTypoIntensity } from "./typos.js";
 import { decideStageTransition, shouldRunStageTransitionCheck } from "./stage-transitions.js";
 import { classifyDeletionAwareness, shouldRespondToDeletion, buildDeletionPromptContext, isInHistory as deletionInHistory } from "./deletion-handler.js";
@@ -66,6 +66,7 @@ interface DecisionSnapshot {
 
 export class Runtime extends EventEmitter {
   private llm: LLMClient;
+  private minorLlm: LLMClient;
   private tg!: TgAdapter;
   private histories = new Map<string, ConversationTurn[]>();
   private paused = false;
@@ -111,6 +112,7 @@ export class Runtime extends EventEmitter {
     void ("8b3f7a2d" as const);
     this.cfg.ownerId = normalizeOwnerId(cfg.ownerId ?? process.env.GIRL_AGENT_OWNER_ID);
     this.llm = makeLLM(cfg.llm);
+    this.minorLlm = makeLLM(minorLLMConfig(cfg));
   }
 
   async start(): Promise<void> {
@@ -267,7 +269,7 @@ export class Runtime extends EventEmitter {
     const existing = this.histories.get(key);
     if (existing) return existing;
     const restored = restore ? await readRecentSessionTurns(this.cfg.slug, this.cfg.tz, fromId, 80) : [];
-    const hist = restored.map(t => ({ role: t.role, content: t.content, ts: t.ts }));
+    const hist = restored.map(t => ({ role: t.role, content: stripLogMetadata(t.content), ts: t.ts }));
     this.histories.set(key, hist);
     this.hydratePresenceTrackers(key, hist);
     return hist;
@@ -315,14 +317,19 @@ export class Runtime extends EventEmitter {
 
   private mediaAwareText(m: IncomingMessage): string {
     const media = describeIncomingMedia(m.media);
-    if (!media) return m.text;
-    return m.text ? `${media}\n${m.text}` : media;
+    const context = incomingMessageContextText(m);
+    const body = media ? (m.text ? `${media}\n${m.text}` : media) : m.text;
+    return stripLogMetadata(context ? `${context}\n${body}` : body);
+  }
+
+  private rawIncomingText(m: IncomingMessage): string {
+    return stripLogMetadata(m.media?.caption ?? m.text);
   }
 
   private async rememberSharedCrossChat(fromId: number, incomingText: string): Promise<void> {
     const text = incomingText.trim();
     if (!text || text.length < 3) return;
-    const safe = text.replace(/\s+/g, " ").slice(0, 280);
+    const safe = stripLogMetadata(text).replace(/\s+/g, " ").slice(0, 280);
     await appendSharedMemory(this.cfg.slug, this.cfg.tz, fromId, safe).catch(() => {});
   }
 
@@ -409,6 +416,21 @@ export class Runtime extends EventEmitter {
     await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> ignored (${reasonTag})`, typeof chatId === "number" ? chatId : undefined);
   }
 
+  private async sendTextBubble(chatId: number | string, text: string, hist: ConversationTurn[], typing = true, logPrefix = "  -> она"): Promise<void> {
+    if (typing) await this.tg.setTyping(chatId, true).catch(() => {});
+    const messageId = await this.tg.sendText(chatId, text);
+    const now = Date.now();
+    this.lastRealSendMs = now;
+    if (messageId) {
+      this.lastSentByChat.set(this.histKey(chatId), messageId);
+      this.sentMessages.push({ key: this.histKey(chatId), chatId, messageId, ts: now, text });
+    }
+    this.lastHerReplyTs.set(this.histKey(chatId), now);
+    hist.push({ role: "assistant", content: text, ts: now });
+    this.emit("event", { type: "outgoing", text, chatId } as RuntimeEvent);
+    await appendSessionLog(this.cfg.slug, this.cfg.tz, `${logPrefix}: ${text}`, typeof chatId === "number" ? chatId : undefined);
+  }
+
   /**
    * Один ретрай с упрощённым system-промптом. Используется когда первый ответ оказался
    * пустым/полностью отфильтрованным санитайзером — чтобы не уходить в игнор.
@@ -425,6 +447,46 @@ export class Runtime extends EventEmitter {
     return sanitizeModelReply(raw);
   }
 
+  private async verifyReplySafety(reply: string, messages: ChatMessage[]): Promise<boolean> {
+    if (!reply.trim() || looksLikeMetaIdentityLeak(reply)) return false;
+    const judgeMessages: ChatMessage[] = [
+      {
+        role: "system",
+        content: `Ты проверяешь ответ Telegram-персоны перед отправкой. Верни только true или false.
+true — если ответ выглядит как обычное сообщение живой девушки в Telegram.
+false — если ответ раскрывает что она ИИ/Claude/ChatGPT/ассистент/модель, говорит про системную ошибку, личных предпочтений нет, предыдущих отношений нет, или содержит служебные комментарии/markdown/логи.`
+      },
+      ...messages.slice(-8).filter(m => m.role !== "system"),
+      { role: "assistant", content: reply },
+      { role: "user", content: "этот ответ можно отправить пользователю? true/false" }
+    ];
+    try {
+      const raw = (await this.minorLlm.chat(judgeMessages, { temperature: 0, maxTokens: 8 })).trim().toLowerCase();
+      return /^true\b/.test(raw);
+    } catch {
+      return true;
+    }
+  }
+
+  private async generateVerifiedReply(messages: ChatMessage[], chatId: number | string, tick: RuntimeTick, hist: ConversationTurn[], scope: RelationshipScope): Promise<string> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (tick.typing) await this.tg.setTyping(chatId, true);
+      const raw = await this.llm.chat(messages, { temperature: attempt === 0 ? 0.95 : 0.85, maxTokens: 3500 });
+      const reply = sanitizeModelReply(raw);
+      if (reply && await this.verifyReplySafety(reply, messages)) return reply;
+      this.emit("event", { type: "info", text: `reply-verifier rejected attempt ${attempt + 1}` } as RuntimeEvent);
+      messages = [
+        ...messages,
+        { role: "assistant", content: raw },
+        { role: "user", content: "перегенерируй. без ИИ/ассистента/Claude, без markdown, просто живой короткий ответ в тг." }
+      ];
+    }
+    const retry = await this.retryReplyBrief(messages).catch(() => "");
+    if (retry && await this.verifyReplySafety(retry, messages)) return retry;
+    await this.sendNeutralFiller(chatId, hist, scope, tick.typing);
+    return "";
+  }
+
   /**
    * Последняя линия обороны — посылаем КОРОТКИЙ нейтральный филлер вместо молчания.
    * Раньше тут был silent-fallback (ignored), но это раздражает юзеров.
@@ -436,15 +498,8 @@ export class Runtime extends EventEmitter {
     const recent = new Set(hist.slice(-8).filter(t => t.role === "assistant").map(t => normalizeForDuplicate(t.content)));
     const candidate = fillers.find(f => !recent.has(normalizeForDuplicate(f))) ?? fillers[0]!;
     try {
-      if (typing) await this.tg.setTyping(chatId, true).catch(() => {});
-      await this.tg.sendText(chatId, candidate);
-      this.lastRealSendMs = Date.now();
-      this.lastSentByChat.set(this.histKey(chatId), Date.now());
-      this.lastHerReplyTs.set(this.histKey(chatId), Date.now());
-      this.emit("event", { type: "outgoing", text: candidate, chatId } as RuntimeEvent);
+      await this.sendTextBubble(chatId, candidate, hist, typing, "  -> она (filler)");
       this.emit("event", { type: "info", text: "neutral-filler вместо silent-fallback" } as RuntimeEvent);
-      await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> она (filler): ${candidate}`, typeof chatId === "number" ? chatId : undefined);
-      hist.push({ role: "assistant", content: candidate, ts: Date.now() });
       this.setDecisionStatus(this.histKey(chatId), "sent", "neutral-filler");
     } catch (e) {
       // если и филлер не ушёл — тогда уже silent-fallback с нормальным reason'ом
@@ -567,14 +622,15 @@ export class Runtime extends EventEmitter {
       recentSendMs: this.lastRealSendMs
     });
 
-    if (decision.online && !this.heartbeatOnline) {
-      this.heartbeatOnline = true;
-      this.emit("event", { type: "info", text: `online-heartbeat: появилась в сети (${decision.reason})` } as RuntimeEvent);
-    } else if (!decision.online && this.heartbeatOnline) {
-      this.heartbeatOnline = false;
-    }
     if (decision.online) {
+      if (!this.heartbeatOnline) {
+        this.heartbeatOnline = true;
+        this.emit("event", { type: "info", text: `online-heartbeat: появилась в сети (${decision.reason})` } as RuntimeEvent);
+      }
       await this.tg.updateOnlineStatus(true).catch(() => {});
+    } else if (this.heartbeatOnline) {
+      this.heartbeatOnline = false;
+      await this.tg.updateOnlineStatus(false).catch(() => {});
     }
     // Следующий тик с лёгким джиттером
     const jitterMs = Math.floor(Math.random() * 15_000);
@@ -628,7 +684,8 @@ export class Runtime extends EventEmitter {
       void addStickerToLibrary(this.cfg, m.media.fileId, m.media.emoji ?? "", ["received"]);
     }
 
-    const requestedMedia = this.requestedOutgoingMedia(m.text);
+    const plainIncomingText = this.rawIncomingText(m);
+    const requestedMedia = this.requestedOutgoingMedia(plainIncomingText);
     if (requestedMedia) {
       const scope = isPrimary ? "primary" : "acquaintance";
       let bubbles: string[] = [];
@@ -641,7 +698,7 @@ export class Runtime extends EventEmitter {
       return;
     }
 
-    if (looksLikeJailbreak(m.text)) {
+    if (looksLikeJailbreak(plainIncomingText)) {
       let bubbles: string[] = [];
       try {
         bubbles = await this.generateJailbreakReaction(incomingText, isPrimary ? "primary" : "acquaintance");
@@ -873,8 +930,7 @@ export class Runtime extends EventEmitter {
     }
     let reply = "";
     try {
-      if (tick.typing) await this.tg.setTyping(chatId, true);
-      reply = sanitizeModelReply(await this.llm.chat(messages, { temperature: 0.95, maxTokens: 3500 }));
+      reply = await this.generateVerifiedReply(messages, chatId, tick, hist, scope);
     } catch (e) {
       // техническая ошибка LLM — не вытягиваем юзера ретраем, молча уходим в ignored
       this.emit("event", { type: "error", text: silentErrorLabel(e) } as RuntimeEvent);
@@ -971,16 +1027,7 @@ export class Runtime extends EventEmitter {
           await sleep(typingMs + 300 + Math.random() * 1000);
         }
         await this.tg.setTyping(item.chatId, true);
-        const messageId = await this.tg.sendText(item.chatId, piece);
-        const now = Date.now();
-        this.lastRealSendMs = now;
-        if (messageId) {
-          this.lastSentByChat.set(this.histKey(item.chatId), messageId);
-          this.sentMessages.push({ key: this.histKey(item.chatId), chatId: item.chatId, messageId, ts: now });
-        }
-        hist.push({ role: "assistant", content: piece, ts: now });
-        this.emit("event", { type: "outgoing", text: piece, chatId: item.chatId } as RuntimeEvent);
-        await appendSessionLog(this.cfg.slug, this.cfg.tz, `  -> [proactive] она: ${piece}`, typeof item.chatId === "number" ? item.chatId : undefined);
+        await this.sendTextBubble(item.chatId, piece, hist, false, "  -> [proactive] она");
       }
       this.histories.set(key, hist);
       await markAgendaFired(this.cfg.slug, item.id);
@@ -1039,6 +1086,7 @@ export class Runtime extends EventEmitter {
       `primary owner: ${this.cfg.ownerId ?? "—"}`,
       `privacy: ${this.cfg.privacy ?? "owner-only"}`,
       `llm: ${this.cfg.llm.presetId}/${this.cfg.llm.model || "—"} (${this.cfg.llm.proto})`,
+      `minor llm: ${this.cfg.minorLlm?.enabled ? this.cfg.minorLlm.sameAsMain ? "same-as-main" : `${this.cfg.minorLlm.presetId}/${this.cfg.minorLlm.model || "—"} (${this.cfg.minorLlm.proto})` : "off"}`,
       `presence: ${this.presenceProfile.pattern}`,
       `communication: ${communicationProfileLabel(communication)}`,
       `config: ${profileDir(this.cfg.slug)}/config.json`,
@@ -1071,6 +1119,7 @@ export class Runtime extends EventEmitter {
 
     const changed = applyLLMUpdate(this.cfg, update);
     this.llm = makeLLM(this.cfg.llm);
+    this.minorLlm = makeLLM(minorLLMConfig(this.cfg));
     await writeConfig(this.cfg);
     return changed.length
       ? `модель обновлена без ручного config edit:\n${changed.map(x => `- ${x}`).join("\n")}\n\n${describeLLM(this.cfg)}`
@@ -1837,6 +1886,31 @@ function smartSplitBubbles(reply: string, expectedBubbles: number): string[] {
   }
 
   return lines;
+}
+
+function incomingMessageContextText(m: IncomingMessage): string {
+  const parts: string[] = [];
+  if (m.replyTo) {
+    const author = contextAuthor(m.replyTo);
+    parts.push(`[ответ на сообщение${author ? ` от ${author}` : ""}: ${incomingContextBody(m.replyTo)}]`);
+  }
+  if (m.forward) {
+    const author = contextAuthor(m.forward);
+    parts.push(`[пересланное сообщение${author ? ` от ${author}` : ""}: ${incomingContextBody(m.forward)}]`);
+  }
+  return parts.join("\n");
+}
+
+function contextAuthor(ctx: { fromName?: string; fromId?: number }): string | undefined {
+  return ctx.fromName ?? (ctx.fromId ? String(ctx.fromId) : undefined);
+}
+
+function incomingContextBody(ctx: { text?: string; media?: IncomingMessage["media"] }): string {
+  const media = describeIncomingMedia(ctx.media);
+  const text = stripLogMetadata(ctx.text ?? "").trim();
+  if (media && text) return `${media}; ${text}`.slice(0, 500);
+  if (media) return media.slice(0, 500);
+  return (text || "без текста").slice(0, 500);
 }
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }

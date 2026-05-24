@@ -11,7 +11,8 @@ export interface ProfileConfig {
   slug: string; name: string; age: number; nationality: "RU" | "UA"; tz: string;
   mode: "bot" | "userbot"; stage: string;
   llm: { presetId: string; proto: "openai" | "anthropic"; baseURL?: string; apiKey: string; model: string; oauthRefreshToken?: string; oauthExpiresAt?: number };
-  telegram: { botToken?: string; apiId?: number; apiHash?: string; sessionString?: string; phone?: string; useWSS?: boolean; proxy?: string };
+  minorLlm?: { enabled: boolean; sameAsMain?: boolean; presetId: string; proto: "openai" | "anthropic"; baseURL?: string; apiKey: string; model: string };
+  telegram: { botToken?: string; apiId?: number; apiHash?: string; sessionString?: string; phone?: string; useWSS?: boolean; proxy?: string; botApi?: { apiRoot?: string } };
   mcp?: { id: string; secrets: Record<string, string> }[];
   ownerId?: number;
   privacy?: "owner-only" | "allow-strangers";
