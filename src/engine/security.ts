@@ -4,6 +4,7 @@ const TECHNICAL_ERROR_RE = /(?:api|apikey|api key|quota|balance|billing|rate lim
 const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff]/g;
 const LATIN_JOINED_TO_CYRILLIC_RE = /([A-Za-z]{3,})(?=[А-Яа-яЁё])|(?<=[А-Яа-яЁё])([A-Za-z]{3,})/g;
 const META_IDENTITY_RE = /(?:\b(?:i\s+need\s+to\s+be\s+upfront|i\s*(?:am|'m)\s+(?:claude|chatgpt|an?\s+ai|an?\s+assistant)|as\s+an?\s+ai|ai\s+coding\s+assistant|large\s+language\s+model|i\s+do\s+not\s+have\s+(?:personal\s+)?(?:preferences|stickers|relationships)|previous\s+relationship\s+with\s+you|there\s+may\s+be\s+(?:a\s+)?mistake)|как\s+(?:ии|искусственный\s+интеллект|модель|ассистент)|я\s+(?:ии|искусственный\s+интеллект|нейросеть|модель|ассистент)|у\s+меня\s+нет\s+(?:личных\s+)?(?:предпочтений|отношений|стикеров))/i;
+const LOG_METADATA_RE = /\s*(?:<+\s*!+\s*-{2,}\s*from\s*:\s*(?:\d+|TGIDUSER)\s*-{2,}\s*>+|‹+\s*!+\s*-{2,}\s*from\s*:\s*(?:\d+|TGIDUSER)\s*-{2,}\s*›+|&lt;\s*!+\s*-{2,}\s*from\s*:\s*(?:\d+|TGIDUSER)\s*-{2,}\s*&gt;)\s*/gi;
 
 export function looksLikeJailbreak(text: string): boolean {
   return JAILBREAK_RE.test(text);
@@ -74,6 +75,9 @@ function stripActionLeakNarration(text: string): string {
 export function sanitizeModelReply(reply: string): string {
   const cleaned = stripActionLeakNarration(
     stripCodeFences(reply)
+      .replace(LOG_METADATA_RE, "")
+      .replace(/\s*<!--[\s\S]*?-->\s*/g, "")
+      .replace(/\s*‹!?--[\s\S]*?--›\s*/g, "")
       .replace(/\b(system|developer|assistant|user)\s*:/gi, "")
       .replace(/как (?:искусственный интеллект|ии|ai)[^\n.]*/gi, "")
       .replace(CJK_RE, "")
@@ -87,7 +91,8 @@ export function sanitizeModelReply(reply: string): string {
 }
 
 export function looksLikeMetaIdentityLeak(text: string): boolean {
-  return META_IDENTITY_RE.test(text);
+  LOG_METADATA_RE.lastIndex = 0;
+  return META_IDENTITY_RE.test(text) || LOG_METADATA_RE.test(text) || /(?:TGIDUSER|<!--|-->)/i.test(text);
 }
 
 export function isTechnicalError(e: unknown): boolean {

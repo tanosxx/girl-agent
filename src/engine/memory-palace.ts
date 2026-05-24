@@ -13,6 +13,7 @@ import {
   readMd,
   readSessionLog,
   sessionDate,
+  stripLogMetadata,
   writeMd
 } from "../storage/md.js";
 
@@ -111,7 +112,7 @@ function wordsFrom(text: string): string[] {
 }
 
 function normalizedQuote(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, " ").trim();
+  return stripLogMetadata(value).toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function today(tz: string): string {
@@ -174,7 +175,7 @@ function parseDrawer(raw: string): MemoryDrawer | null {
   if (!metaMatch) return null;
   try {
     const meta = JSON.parse(metaMatch[1] ?? "") as Partial<MemoryDrawer>;
-    const quote = raw.slice(metaMatch[0].length);
+    const quote = stripLogMetadata(raw.slice(metaMatch[0].length));
     if (!meta.id || !meta.ts || !meta.wing || !meta.room || !meta.hall || !meta.source || !quote.trim()) return null;
     return {
       id: meta.id,
@@ -232,7 +233,7 @@ function parsedDrawers(value: unknown): ParsedMemoryDrawer[] {
   for (const item of value) {
     const rec = asRecord(item);
     if (!rec) continue;
-    const quote = typeof rec.quote === "string" ? rec.quote.trim() : "";
+    const quote = typeof rec.quote === "string" ? stripLogMetadata(rec.quote).trim() : "";
     if (!quote) continue;
     const room = normalizeRoom(typeof rec.room === "string" ? rec.room : "");
     out.push({
@@ -365,15 +366,15 @@ export async function loadMemoryPalaceContext(cfg: ProfileConfig, incoming?: str
     ? factLines.filter(l => tokens.some(t => l.toLowerCase().includes(t))).slice(-18).join("\n") || facts.slice(-1800)
     : facts.slice(-1800);
   return {
-    facts: relevantFacts,
-    episodes: episodesRaw.slice(-2200),
-    relationshipTimeline: timeline.slice(-2200),
-    attachment: attachment.slice(-1200),
-    time: [openLoops.slice(-1400), promises.slice(-1400)].filter(Boolean).join("\n\n"),
-    weeklyLife: weeklyLife.slice(-1200),
-    socialGraph: socialGraph.slice(-1200),
-    habits: habits.slice(-1200),
-    openLoops: openLoops.slice(-1400),
+    facts: stripLogMetadata(relevantFacts),
+    episodes: stripLogMetadata(episodesRaw.slice(-2200)),
+    relationshipTimeline: stripLogMetadata(timeline.slice(-2200)),
+    attachment: stripLogMetadata(attachment.slice(-1200)),
+    time: stripLogMetadata([openLoops.slice(-1400), promises.slice(-1400)].filter(Boolean).join("\n\n")),
+    weeklyLife: stripLogMetadata(weeklyLife.slice(-1200)),
+    socialGraph: stripLogMetadata(socialGraph.slice(-1200)),
+    habits: stripLogMetadata(habits.slice(-1200)),
+    openLoops: stripLogMetadata(openLoops.slice(-1400)),
     palace: renderPalaceRecall(palaceHits)
   };
 }
@@ -397,23 +398,25 @@ export function memoryPalacePromptFragment(ctx: MemoryPalaceContext): string {
 
 async function appendDrawer(cfg: ProfileConfig, source: string, parsed: ParsedMemoryDrawer): Promise<void> {
   const stamp = nowStamp();
-  const quoteKey = normalizedQuote(parsed.quote);
+  const safeParsed = { ...parsed, quote: stripLogMetadata(parsed.quote) };
+  const quoteKey = normalizedQuote(safeParsed.quote);
+  if (!quoteKey) return;
   const duplicate = (await listPalaceDrawers(cfg)).find(existing =>
     normalizedQuote(existing.quote) === quoteKey ||
-    (existing.room === parsed.room && existing.hall === parsed.hall && normalizedQuote(existing.quote).includes(quoteKey)) ||
-    (existing.room === parsed.room && existing.hall === parsed.hall && quoteKey.includes(normalizedQuote(existing.quote)))
+    (existing.room === safeParsed.room && existing.hall === safeParsed.hall && normalizedQuote(existing.quote).includes(quoteKey)) ||
+    (existing.room === safeParsed.room && existing.hall === safeParsed.hall && quoteKey.includes(normalizedQuote(existing.quote)))
   );
-  if (duplicate && duplicate.salience >= parsed.salience) return;
+  if (duplicate && duplicate.salience >= safeParsed.salience) return;
   const drawer: MemoryDrawer = {
-    id: stableId(source, parsed.quote),
+    id: stableId(source, safeParsed.quote),
     ts: stamp,
     wing: wingFor(cfg),
-    room: parsed.room,
-    hall: parsed.hall,
+    room: safeParsed.room,
+    hall: safeParsed.hall,
     source,
-    quote: parsed.quote,
-    keywords: parsed.keywords,
-    salience: parsed.salience
+    quote: safeParsed.quote,
+    keywords: safeParsed.keywords,
+    salience: safeParsed.salience
   };
   const existing = await readMd(cfg.slug, drawerPath(drawer));
   if (existing.trim()) return;
@@ -442,7 +445,9 @@ async function appendCompatibilityMemory(cfg: ProfileConfig, drawer: MemoryDrawe
 }
 
 export async function recordInteractionMemory(llm: LLMClient, cfg: ProfileConfig, incoming: string, reply?: string, fromId?: number, scope: "primary" | "acquaintance" = "primary"): Promise<void> {
-  if (!incoming.trim()) return;
+  const safeIncoming = stripLogMetadata(incoming);
+  const safeReply = stripLogMetadata(reply ?? "");
+  if (!safeIncoming.trim()) return;
   await ensureDefaults(cfg);
   const raw = await llm.chat([
     {
@@ -456,12 +461,12 @@ export async function recordInteractionMemory(llm: LLMClient, cfg: ProfileConfig
       content: `Профиль: ${cfg.name}, стадия ${cfg.stage}.
 Он написал:
 """
-${incoming}
+${safeIncoming}
 """
 
 Она ответила:
 """
-${reply ?? ""}
+${safeReply}
 """
 
 Верни STRICT JSON:
@@ -494,7 +499,7 @@ ${reply ?? ""}
 
 export async function mineDailyLogToPalace(llm: LLMClient, cfg: ProfileConfig, day: string): Promise<number> {
   await ensureDefaults(cfg);
-  const log = await readSessionLog(cfg.slug, day);
+  const log = stripLogMetadata(await readSessionLog(cfg.slug, day));
   if (!log.trim()) return 0;
   const chunks = splitTextByChars(log, 12000);
   let total = 0;
@@ -576,9 +581,9 @@ export async function migrateExistingMemoryToPalace(cfg: ProfileConfig): Promise
   let made = 0;
   const wing = wingFor(cfg);
   const migrateLines = async (source: string, content: string, hall: MemoryHall, room: string) => {
-    const lines = content.split("\n").map(line => line.trim()).filter(line => line.startsWith("- "));
+    const lines = stripLogMetadata(content).split("\n").map(line => line.trim()).filter(line => line.startsWith("- "));
     for (const line of lines) {
-      const quote = line.replace(/^-\s*/, "").trim();
+      const quote = stripLogMetadata(line.replace(/^-\s*/, "")).trim();
       if (!quote) continue;
       const drawer: MemoryDrawer = {
         id: safeId(),

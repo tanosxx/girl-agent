@@ -6,7 +6,7 @@ import { behaviorTick } from "./behavior-tick.js";
 import { applyMoodDelta, maybeReflect } from "./reflect.js";
 import {
   appendSessionLog, appendSharedMemory, readRelationship, writeRelationship, writeConfig, writeMd,
-  readAgenda, writeAgenda, readRecentSessionTurns, readMd, sessionDate, normalizeOwnerId, profileDir
+  readAgenda, writeAgenda, readRecentSessionTurns, readMd, sessionDate, normalizeOwnerId, profileDir, stripLogMetadata
 } from "../storage/md.js";
 import { findStage } from "../presets/stages.js";
 import { communicationProfileLabel, normalizeCommunicationProfile } from "../presets/communication.js";
@@ -269,7 +269,7 @@ export class Runtime extends EventEmitter {
     const existing = this.histories.get(key);
     if (existing) return existing;
     const restored = restore ? await readRecentSessionTurns(this.cfg.slug, this.cfg.tz, fromId, 80) : [];
-    const hist = restored.map(t => ({ role: t.role, content: t.content, ts: t.ts }));
+    const hist = restored.map(t => ({ role: t.role, content: stripLogMetadata(t.content), ts: t.ts }));
     this.histories.set(key, hist);
     this.hydratePresenceTrackers(key, hist);
     return hist;
@@ -319,17 +319,17 @@ export class Runtime extends EventEmitter {
     const media = describeIncomingMedia(m.media);
     const context = incomingMessageContextText(m);
     const body = media ? (m.text ? `${media}\n${m.text}` : media) : m.text;
-    return context ? `${context}\n${body}` : body;
+    return stripLogMetadata(context ? `${context}\n${body}` : body);
   }
 
   private rawIncomingText(m: IncomingMessage): string {
-    return m.media?.caption ?? m.text;
+    return stripLogMetadata(m.media?.caption ?? m.text);
   }
 
   private async rememberSharedCrossChat(fromId: number, incomingText: string): Promise<void> {
     const text = incomingText.trim();
     if (!text || text.length < 3) return;
-    const safe = text.replace(/\s+/g, " ").slice(0, 280);
+    const safe = stripLogMetadata(text).replace(/\s+/g, " ").slice(0, 280);
     await appendSharedMemory(this.cfg.slug, this.cfg.tz, fromId, safe).catch(() => {});
   }
 
@@ -1907,7 +1907,7 @@ function contextAuthor(ctx: { fromName?: string; fromId?: number }): string | un
 
 function incomingContextBody(ctx: { text?: string; media?: IncomingMessage["media"] }): string {
   const media = describeIncomingMedia(ctx.media);
-  const text = ctx.text?.trim();
+  const text = stripLogMetadata(ctx.text ?? "").trim();
   if (media && text) return `${media}; ${text}`.slice(0, 500);
   if (media) return media.slice(0, 500);
   return (text || "без текста").slice(0, 500);
