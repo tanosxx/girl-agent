@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.7
+
+Дата: 2026-05-24
+
+- Harden log metadata stripping
+- Fix chat user issues
+- Add minor LLM configuration
+- Fix Telegram presence and WebUI issues
+
+
 ## 0.4.6
 
 Дата: 2026-05-24
