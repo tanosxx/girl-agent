@@ -1,0 +1,77 @@
+---
+title: Документация для пользователей
+description: С чего начать, если ты не разработчик и просто хочешь запустить girl-agent.
+---
+
+import { Cards, Card } from "fumadocs-ui/components/card";
+import { Rocket, Download, MessageSquare, Heart, Sparkles, Settings, AlertTriangle } from "lucide-react";
+
+Этот раздел — для **обычных пользователей**. Никакого кода, никакого терминала больше, чем
+нужно. Установка, первый запуск, настройка через интерфейс, объяснение всех опций
+по-человечески.
+
+## Дорожная карта
+
+<Cards>
+  <Card icon={<Rocket />} title="Быстрый старт за 5 минут" href="/docs/users/quick-start" description="Минимум шагов: установка, токен бота, ключ LLM, запуск." />
+  <Card icon={<Download />} title="Установка" href="/docs/users/installation" description="Linux/macOS/WSL, Termux (Android), Docker, Windows." />
+  <Card icon={<Settings />} title="WebUI" href="/docs/users/webui" description="Что такое WebUI на localhost:3000 и зачем он нужен." />
+  <Card icon={<MessageSquare />} title="Bot vs Userbot" href="/docs/users/telegram-modes" description="Чем отличаются режимы и какой выбрать." />
+  <Card icon={<Sparkles />} title="LLM-провайдеры" href="/docs/users/llm-providers" description="Какой ИИ выбрать: ClaudeHub, OpenAI, локальный, бесплатный." />
+  <Card icon={<Heart />} title="Профили общения" href="/docs/users/communication-profiles" description="Милая, альтушка, болтушка — какие бывают и чем отличаются." />
+</Cards>
+
+## Что важно понять с самого начала
+
+### 1. Это не чат-бот «всё-знаю»
+
+`girl-agent` — это **персонаж**, который живёт в Telegram. Она:
+- может **игнорить**, если ты её бесишь
+- может **спать** ночью и не отвечать
+- может **обижаться** и молчать часами
+- может **читать сообщение и не отвечать** (но галочки прочитанного появятся)
+- может **писать первой**, если давно не общались
+
+Это не баг. Так задумано. Не пытайся выжать из неё «нормальное ассистент-поведение» —
+не получится.
+
+### 2. Есть два режима в Telegram
+
+- **Bot-режим** (`@BotFather` создаёт токен) — проще, безопаснее, но видно что это бот.
+- **Userbot-режим** (твой второй Telegram-аккаунт через API ID/Hash) — выглядит как живой
+  человек, может ставить реакции, читать, удалять, редактировать. **Используй отдельный
+  тестовый аккаунт — Telegram может забанить за подозрительную активность.**
+
+Подробнее: [Bot vs Userbot →](/docs/users/telegram-modes)
+
+### 3. Тебе нужен ключ от LLM
+
+Сам по себе `girl-agent` не думает — он обращается к ИИ (OpenAI, Anthropic, ClaudeHub и др.).
+Тебе нужен API-ключ от одного из них. Рекомендуем **ClaudeHub** — работает в РФ через СБП и крипту.
+
+Подробнее: [LLM-провайдеры →](/docs/users/llm-providers)
+
+### 4. Все настройки — в WebUI
+
+После установки запускаешь `girl-agent`, открывается **WebUI** на `http://localhost:3000`.
+Там визард первой настройки, профили, лог, настройки, маркетплейс аддонов — всё через
+браузер. Терминал нужен только для запуска.
+
+Подробнее: [WebUI →](/docs/users/webui)
+
+## Когда что-то идёт не так
+
+<Cards>
+  <Card
+    icon={<AlertTriangle />}
+    title="Решение проблем"
+    href="/docs/users/troubleshooting"
+    description="Ничего не запускается, не получает токен, не отвечает — частые случаи и как чинить."
+  />
+  <Card
+    icon={<MessageSquare />}
+    title="FAQ"
+    href="/docs/users/faq"
+    description="Часто задаваемые вопросы — короткие ответы на болезненные темы."
+  />
+</Cards>

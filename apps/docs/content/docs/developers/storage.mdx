@@ -1,0 +1,183 @@
+---
+title: Storage
+description: Файловое хранилище — DATA_ROOT, профиль, формат markdown / json
+---
+
+Никакой БД. Только файлы. Контракт — `src/storage/md.ts`.
+
+## DATA_ROOT
+
+```ts
+export const DATA_ROOT = resolveDataRoot();
+
+function resolveDataRoot(): string {
+  if (process.env.GIRL_AGENT_DATA) return process.env.GIRL_AGENT_DATA;
+  if (process.platform === "win32") return path.join(process.env.APPDATA ?? os.homedir(), "girl-agent", "data");
+  return path.join(os.homedir(), ".local", "share", "girl-agent", "data");
+}
+```
+
+Один путь на установку. Все профили — поддиректории.
+
+## Структура профиля
+
+```
+<DATA_ROOT>/<slug>/
+├── config.json              # ProfileConfig (см. types.ts)
+├── persona.md               # генерируется при создании
+├── speech.md                # шаблоны речи
+├── communication.md         # стиль общения (текстовый профиль)
+├── stickers.md              # подборка эмодзи/стикеров
+├── relationship.md          # frontmatter: score, stage, conflict, meters
+├── agenda.json              # очередь проактивов
+├── .migrations.json         # { appliedMigrations: ["0112", ...] }
+│
+├── log/
+│   ├── 2026-05-15.md        # cессия дня (raw диалог)
+│   └── 2026-05-16.md
+│
+├── memory/
+│   ├── long-term.md         # факты о нём, важное
+│   ├── facts.md             # короткие факты (имя, dob, ...)
+│   ├── daily/
+│   │   ├── 2026-05-15.md    # саммари дня
+│   │   └── ...
+│   ├── episodes/
+│   │   ├── first-date.md
+│   │   └── ...
+│   └── palace/
+│       └── <wing>/<hall>/<room>/<drawer>.md
+│
+├── daily-life/
+│   └── 2026-05-16.md        # её план дня
+│
+├── addons/
+│   └── <addon-slug>/        # установленные .gaa аддоны
+│
+└── tg-session.txt           # только userbot: StringSession Telegram
+```
+
+## Базовые операции
+
+Все экспорты из `storage/md.ts`:
+
+```ts
+// директории
+profileDir(slug: string): string
+
+// конфиг
+readConfig(slug: string): Promise<ProfileConfig | null>
+writeConfig(cfg: ProfileConfig): Promise<void>
+listProfiles(): Promise<string[]>
+deleteProfile(slug: string): Promise<void>
+
+// произвольные .md
+readMd(slug: string, name: string): Promise<string | undefined>
+writeMd(slug: string, name: string, body: string): Promise<void>
+upsertMdSection(slug, name, section, body): Promise<void>
+
+// сессии и логи
+openSession(slug: string, now?: Date): Promise<void>
+appendSessionLog(slug, role, text, meta?): Promise<void>
+closeCurrentSession(llm, cfg): Promise<void>
+readSessionLog(slug, date): Promise<string | undefined>
+listSessions(slug): Promise<string[]>
+
+// relationship
+readRelationship(slug): Promise<{ score, stage, conflict, meters, ... }>
+writeRelationship(slug, patch): Promise<void>
+updateRelationshipMeta(slug, patch): Promise<void>
+
+// helpers
+slugify(name: string): string
+normalizeOwnerId(raw: unknown): { kind: "id"|"username"|"none"; value?: string|number }
+```
+
+## Конфиг — `config.json`
+
+```ts
+interface ProfileConfig {
+  slug: string;
+  name: string;
+  age: number;
+  nationality: "RU" | "UA";
+  tz: string;
+  mode: "bot" | "userbot";
+  stage: StageId;
+  llm: {
+    presetId: string;
+    proto: "openai" | "anthropic";
+    baseURL?: string;
+    apiKey: string;
+    model: string;
+    oauth?: { refreshToken: string; accessToken?: string; expiresAt?: number };
+  };
+  telegram:
+    | { botToken: string }
+    | {
+        apiId: number;
+        apiHash: string;
+        phone: string;
+        session?: string;  // StringSession
+        proxy?: { ip: string; port: number } & ({ MTProxy: true; secret: string } | { socksType: 4|5; username?: string; password?: string });
+      };
+  ownerId?: { kind: "id"|"username"|"none"; value?: string | number };
+  privacy: "owner-only" | "whitelist" | "open";
+  whitelist?: Array<{ kind: "id"|"username"; value: string | number }>;
+  createdAt: string;       // ISO
+  sleepFrom?: number;      // 0..24
+  sleepTo?: number;
+  nightWakeChance?: number;
+  ignoreTendency?: number; // 0..100
+  communication?: CommunicationProfile;
+  vibe?: "short" | "warm"; // legacy, не использовать
+  personaNotes?: string;
+  busySchedule?: BusyBlock[];
+}
+```
+
+См. полный набор типов в `src/types.ts`.
+
+## relationship.md — формат
+
+```md
+---
+score:
+  interest: 50
+  trust: 30
+  attraction: 40
+  annoyance: 15
+  cringe: 10
+stage: convinced
+conflict:
+  level: 0
+  apologized: false
+meters:
+  rudeness: 12
+  flakiness: 25
+  inconsistency: 0
+  pressure: 8
+  jealousy: 5
+lastUpdated: 2026-05-16T12:00:00Z
+---
+
+# отношения с {name}
+
+(свободный текст, который ведёт LLM — что между ними сейчас)
+```
+
+Score колапс из 5 шкал — `updateScore(slug, delta)` — нормализует delta в `[-N..+N]` и кламп.
+
+## Атомарность
+
+- **Тонкие записи** идут через `appendFile` (логи) — это норма.
+- **Толстые конфигурации** (`config.json`, `relationship.md`) пишутся **в темп файл** и переименовываются (atomic rename на одной файловой системе).
+- Параллельная запись разных профилей — безопасна (директории не пересекаются).
+- Параллельная запись одного и того же файла одного профиля — **не защищена.** Поэтому Runtime сериализует записи во времени (нет «двух хендлеров на один профиль»).
+
+## Конвенции
+
+- **Имена в slug'ах.** Папка профиля = `slugify(name)`. UI ругается, если slug уже занят.
+- **Никогда не храните секреты в `persona.md` / `relationship.md`.** Они идут в LLM-промпт. Секреты — в `config.json` и **никогда** в memory/long-term.
+- **Дата сессий — в её tz.** Файл `log/2026-05-16.md` — это её 16 мая, а не UTC.
+- **`memory/episodes/*` пишет LLM**, не пользователь. Имя файла — slugified ключ события.

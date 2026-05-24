@@ -1,0 +1,163 @@
+---
+title: Бэкап и восстановление
+description: Как сохранить и перенести профили, как поменять data-папку.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Всё состояние `girl-agent` лежит в **одной папке** (по умолчанию в системной user-data
+директории). Бэкап — это просто tar/zip этой папки. Восстановление — распаковка обратно.
+
+## Где лежит data-папка
+
+| Платформа    | Путь по умолчанию                                                     |
+| ------------ | --------------------------------------------------------------------- |
+| Linux        | `~/.local/share/girl-agent/data` (или `$XDG_DATA_HOME/girl-agent/data`) |
+| macOS        | `~/Library/Application Support/girl-agent/data`                        |
+| Windows      | `%APPDATA%\girl-agent\data`                                             |
+| Termux       | `~/.local/share/girl-agent/data`                                       |
+| Docker       | то, что смонтировано на `/data` (через `GIRL_AGENT_DATA=/data`)        |
+| Внутри проекта | `./data/` (если запускаешь из исходников)                            |
+
+Проверить:
+```bash
+girl-agent --list
+```
+Покажет список профилей и **полный путь к data-dir**.
+
+## Переопределить путь
+
+```bash
+GIRL_AGENT_DATA=/path/to/data girl-agent
+```
+
+Полезно для:
+- Хранения на внешнем диске
+- Шифрованного раздела
+- Сетевой папки (NFS, SMB)
+- Docker volume
+
+## Бэкап
+
+### Простейший вариант — tar
+```bash
+tar czf girl-agent-backup-$(date +%F).tar.gz -C ~/.local/share/girl-agent data
+```
+
+### С шифрованием — age
+```bash
+tar cz -C ~/.local/share/girl-agent data | age -r age1xxx... > backup.tar.gz.age
+```
+
+### С шифрованием — gpg
+```bash
+tar cz -C ~/.local/share/girl-agent data | gpg -c > backup.tar.gz.gpg
+```
+
+### restic (инкрементально)
+```bash
+restic -r /backups/girl-agent init
+restic -r /backups/girl-agent backup ~/.local/share/girl-agent/data
+```
+
+### rclone в облако
+```bash
+rclone sync ~/.local/share/girl-agent/data remote:girl-agent-backup
+```
+
+<Callout type="warn">
+  В data-папке лежат **TG sessionString**, **api-ключи LLM**, **boto токен**, **вся
+  переписка**. Шифруй бэкап. Не коммить в git.
+</Callout>
+
+## Восстановление
+
+### На той же машине
+```bash
+tar xzf girl-agent-backup-2026-05-16.tar.gz -C ~/.local/share/girl-agent/
+```
+
+### На другой машине
+
+1. Остановить `girl-agent` процесс если запущен
+2. Распаковать архив в data-dir
+3. **Запустить миграции** на случай если версия отличается:
+   ```bash
+   girl-agent update --verbose
+   ```
+4. Запустить нормально:
+   ```bash
+   girl-agent
+   ```
+
+<Callout type="info">
+  Если sessionString (userbot) переносишь на другой IP — Telegram может пометить как
+  «подозрительная активность» и потребовать ре-логин. Это норма, перепроверь по SMS.
+</Callout>
+
+### Перенос одного профиля
+
+Достаточно скопировать одну подпапку:
+
+```bash
+scp -r me@old-server:.local/share/girl-agent/data/anya \
+       ~/.local/share/girl-agent/data/anya
+```
+
+## Бэкап одного профиля
+
+```bash
+tar czf anya-backup.tar.gz -C ~/.local/share/girl-agent/data anya
+```
+
+Восстановить:
+```bash
+tar xzf anya-backup.tar.gz -C ~/.local/share/girl-agent/data
+```
+
+## Что НЕ нужно бэкапить
+
+- Сам бинарь `girl-agent` (его можно переустановить через npm/docker)
+- `node_modules` (восстанавливается из package.json)
+- Кеши, временные файлы
+
+## Стратегия для production
+
+Если ты запускаешь на VPS долгосрочно — рекомендуем:
+
+1. **Раз в день** — инкрементальный бэкап через restic или borg
+2. **Раз в неделю** — полный шифрованный архив в облако (S3, B2, GDrive)
+3. **Перед каждым `girl-agent update`** — ручной snapshot
+4. **На своей машине** — git-ish архив (без секретов) на случай если хочется иметь
+   историю persona.md изменений
+
+## Расходы
+
+Папка одного активного профиля в среднем:
+- **1-3 МБ** — конфиг и persona
+- **10-50 МБ/год** — лог сырой переписки (зависит от интенсивности)
+- **5-20 МБ/год** — daily summaries, эпизоды
+- **+addons** — обычно 1-10 МБ каждый
+
+Если активный диалог идёт несколько лет — папка может вырасти до сотни МБ. Это норма.
+
+## Очистка старых логов
+
+Если хочешь сжать историю:
+
+```bash
+girl-agent --compact --profile=anya
+```
+
+Сжимает старые `log/*.md` в архив `log/old.tar.gz` и оставляет последние **90 дней**
+доступными для чтения движком. Можно настроить порог:
+
+```bash
+girl-agent --compact --profile=anya --keep-days=180
+```
+
+## Что дальше
+
+- [Security & Privacy](/docs/users/security-privacy)
+- [Updating](/docs/users/updating)
+- [Memory — что лежит в data-папке](/docs/users/memory)

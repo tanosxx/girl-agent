@@ -1,0 +1,171 @@
+---
+title: Обновление
+description: Как обновлять girl-agent и как работают миграции данных.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+## Проверить версию
+
+```bash
+girl-agent --version
+# или
+npx girl-agent --version
+```
+
+В WebUI — внизу в футере или в **Settings → About**.
+
+## Обновить
+
+### npm-установка (глобальная)
+```bash
+npm install -g girl-agent@latest
+```
+
+### Через `npx`
+```bash
+# Не нужно ничего — npx всегда тянет свежее
+npx girl-agent
+```
+
+Если хочешь зафиксировать версию:
+```bash
+npx girl-agent@0.4.1
+```
+
+### Через install-скрипт
+```bash
+curl -fsSL https://raw.githubusercontent.com/TheSashaDev/girl-agent/main/scripts/install.sh | sh
+```
+
+Скрипт обновит до latest и подстроит платформенные особенности.
+
+### Docker
+```bash
+docker pull ghcr.io/thesashadev/girl-agent:latest
+docker stop girl-agent && docker rm girl-agent
+docker run -d --name girl-agent \
+  -p 3000:3000 \
+  -v girl-agent-data:/data \
+  -e GIRL_AGENT_DATA=/data \
+  ghcr.io/thesashadev/girl-agent:latest
+```
+
+### Из исходников
+```bash
+cd /path/to/girl-agent
+git pull
+npm install
+npm run build
+```
+
+## Миграции данных
+
+При первом запуске **новой версии** движок проверяет, нужны ли миграции данных:
+
+```bash
+girl-agent update --verbose
+```
+
+Этот скрипт пройдёт по всем профилям и применит все pending-миграции (например, поправит
+структуру `relationship.md`, перегенерирует `communication.md`, добавит новые поля в
+`config.json`).
+
+Сами миграции лежат в `src/migrations/` — список применённых — в
+`data/<slug>/.migrations.json`.
+
+<Callout type="info">
+  Перед мажорным обновлением (например, 0.x → 1.x) **сделай бэкап `data/`**. Миграции
+  идемпотентны и обратимы только теоретически — лучше иметь дамп.
+</Callout>
+
+## Что меняется между версиями
+
+### MINOR (0.x.y)
+- Багфиксы, новые модули поведения
+- Иногда новые поля в `config.json` (значения по умолчанию)
+- **Безопасно** обновляться, миграции применятся автоматически
+
+### PATCH (0.4.x)
+- Только багфиксы и мелочи
+- **Всегда** безопасно
+
+### MAJOR (0.x → 1.x)
+- Возможны breaking changes в API, конфиге, структуре данных
+- **Обязательно** делать бэкап
+- Читай release notes
+
+## Откат
+
+Если новая версия сломалась:
+
+### npm
+```bash
+npm install -g girl-agent@0.3.5    # фиксированная предыдущая
+```
+
+### Docker
+```bash
+docker pull ghcr.io/thesashadev/girl-agent:0.3.5
+```
+
+### Из исходников
+```bash
+git checkout v0.3.5
+npm install
+npm run build
+```
+
+<Callout type="warn">
+  Если у тебя уже **применились миграции новой версии**, откат на старую может привести
+  к ошибкам чтения config. Восстанови `data/` из бэкапа перед откатом.
+</Callout>
+
+## Автоматическое обновление
+
+### systemd (Linux)
+```bash
+# /etc/systemd/system/girl-agent-update.timer
+[Unit]
+Description=Auto-update girl-agent
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+# /etc/systemd/system/girl-agent-update.service
+[Unit]
+Description=Update girl-agent
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/npm install -g girl-agent@latest
+ExecStartPost=/usr/bin/systemctl restart girl-agent.service
+```
+
+### Docker (watchtower)
+```bash
+docker run -d --name watchtower \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  containrrr/watchtower girl-agent
+```
+
+## Уведомления о новых версиях
+
+При запуске движок проверяет последний релиз на GitHub и пишет в лог если есть новая
+версия. Можно отключить:
+
+```bash
+GIRL_AGENT_NO_UPDATE_CHECK=1 girl-agent
+```
+
+## Что дальше
+
+- [Backup & Restore](/docs/users/backup-restore)
+- [Changelog (на GitHub)](https://github.com/TheSashaDev/girl-agent/releases)
+- [Troubleshooting](/docs/users/troubleshooting)

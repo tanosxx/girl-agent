@@ -4,8 +4,10 @@
 
 import type { LLMClient } from "../llm/index.js";
 import type { ProfileConfig } from "../types.js";
-import { readMd, writeMd } from "../storage/md.js";
+import { readMd, writeMd, profileDir } from "../storage/md.js";
 import type { ConflictState } from "./conflict.js";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
 export interface DailyLifeBlock {
   fromHour: number;     // 0..23 в её локальном tz
@@ -50,7 +52,14 @@ function localWeekday(tz: string, now = new Date()): string {
 
 const SYS = `Ты — режиссёр повседневной жизни персонажа. Сгенерируй ОДИН день её жизни. Никакого пафоса, никаких событий «голливудского масштаба» — обычная жизнь обычной девушки в этом возрасте: школа/колледж/универ/работа по возрасту, рутина, подруги, родители, мелкие конфликты, мысли о прошлой ночи, недосып, проблемы с одеждой, прыщ на лбу, тренировка, разговор с мамой. НЕ выдумывай парня — парень это тот с кем она в тг переписывается, его в blocks НЕ упоминать.`;
 
-function buildPrompt(cfg: ProfileConfig, persona: string, weekday: string, dateLocal: string, conflict: ConflictState | null): string {
+function buildPrompt(
+  cfg: ProfileConfig,
+  persona: string,
+  weekday: string,
+  dateLocal: string,
+  conflict: ConflictState | null,
+  recentEvents: string[]
+): string {
   const conflictNote = conflict && conflict.level > 0
     ? `\n\nВАЖНО: у неё сейчас КОНФЛИКТ с ним (level ${conflict.level}, причина: "${conflict.reason ?? "—"}"). Это влияет на её день:\n- Level 1: лёгкая обида — день чуть более вялый, меньше тёплых событий\n- Level 2: серьёзная обида — день мрачнее, больше бытовых проблем, меньше общения\n- Level 3+: сильный конфликт — день тяжёлый, она раздражена, события негативные, хочет побыть одна\n- В blocks/events/wants отрази это настроение.`
     : "";
@@ -59,7 +68,14 @@ function buildPrompt(cfg: ProfileConfig, persona: string, weekday: string, dateL
     ? `\n\nЕё расписание занятости (busySchedule):\n${cfg.busySchedule.map(s => `- ${s.label}: ${s.from}-${s.to}${s.days ? ` (${s.days.join(", ")})` : ""}`).join("\n")}\n\nУЧИТЫВАЙ это при генерации blocks: если busySlot перекрывает время, activity должна соответствовать. Для возраста до 17 лет используй "в школе", "на уроке", "уроки", "перемена"; НЕ используй "пара", "лекция", "универ", "препод". Для 17+ можно колледж/универ если подходит persona. phoneAvailable=false только когда телефон реально недоступен.`
     : "";
 
-  return `Имя: ${cfg.name}, ${cfg.age}. Стадия отношений с ним: ${cfg.stage}. Часовой пояс: ${cfg.tz}. Сегодня: ${weekday}, ${dateLocal}.${conflictNote}${busyNote}
+  // ВАЖНО: блокируем повторы из предыдущих дней. Без этого LLM может выдать
+  // одно и то же мини-событие подряд (4 дня кофе путают в кофейне — реальная
+  // жалоба из комьюнити). LLM не помнит вчерашние генерации, нужно передать.
+  const recentNote = recentEvents.length > 0
+    ? `\n\nЧТО УЖЕ БЫЛО В ПРЕДЫДУЩИЕ ДНИ (НЕ ПОВТОРЯТЬ — это ровно те же события, нельзя ни их, ни их перефраз):\n${recentEvents.map(e => `- ${e}`).join("\n")}\n\nГенерируй сегодня СВЕЖИЕ события, отличные от перечисленных по сути (а не по формулировке). Если идея повторяется — придумай другую.`
+    : "";
+
+  return `Имя: ${cfg.name}, ${cfg.age}. Стадия отношений с ним: ${cfg.stage}. Часовой пояс: ${cfg.tz}. Сегодня: ${weekday}, ${dateLocal}.${conflictNote}${busyNote}${recentNote}
 
 Персона (выжимка):
 ${persona.slice(0, 1200)}
@@ -109,12 +125,13 @@ export async function loadOrGenerateDailyLife(
 
   const persona = await readMd(cfg.slug, "persona.md");
   const weekday = localWeekday(cfg.tz, now);
+  const recentEvents = await loadRecentEvents(cfg.slug, dateLocal, 5);
   let dl: DailyLife;
   try {
     const raw = await llm.chat(
       [
         { role: "system", content: SYS },
-        { role: "user", content: buildPrompt(cfg, persona, weekday, dateLocal, conflict) }
+        { role: "user", content: buildPrompt(cfg, persona, weekday, dateLocal, conflict, recentEvents) }
       ],
       { temperature: 0.95, maxTokens: 3500, json: true }
     );
@@ -166,6 +183,43 @@ export function currentBlock(dl: DailyLife, tz: string, now = new Date()): Daily
   const h = localHour(tz, now);
   return dl.blocks?.find(b => h >= b.fromHour && h < b.toHour)
     ?? dl.blocks?.[dl.blocks.length - 1];
+}
+
+/**
+ * Читаем мини-события из последних N daily-life файлов (предыдущие дни) —
+ * передаём их LLM как "не повторять". Без этого нейронка спокойно крутит
+ * "в кофейне перепутали заказ" по кругу 4 дня подряд.
+ */
+async function loadRecentEvents(slug: string, todayLocal: string, days: number): Promise<string[]> {
+  try {
+    const dir = path.join(profileDir(slug), "daily-life");
+    const files = await fs.readdir(dir).catch(() => [] as string[]);
+    const recent = files
+      .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+      .map(f => f.replace(/\.md$/, ""))
+      .filter(d => d < todayLocal)
+      .sort()
+      .slice(-days);
+    const out: string[] = [];
+    for (const day of recent) {
+      const raw = await readMd(slug, `daily-life/${day}.md`);
+      if (!raw) continue;
+      const m = raw.match(/<!--daily:(.+?)-->/s);
+      if (!m || !m[1]) continue;
+      try {
+        const parsed = JSON.parse(m[1]) as DailyLife;
+        if (Array.isArray(parsed.events)) {
+          for (const e of parsed.events) {
+            if (typeof e === "string" && e.trim()) out.push(e.trim());
+          }
+        }
+      } catch { /* битый кэш — пропускаем */ }
+    }
+    // ограничим: больше 20 не нужно, обычно 6-12.
+    return out.slice(-20);
+  } catch {
+    return [];
+  }
 }
 
 export function dailyLifePromptFragment(dl: DailyLife, tz: string, now = new Date()): string {

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ProfileConfig } from "../types.js";
 import type { IncomingMedia, IncomingMessage, TgAdapter } from "./index.js";
 import { hasSpoilers, toHtmlWithSpoilers } from "./markdown.js";
+import { normalizeBotReactionEmoji } from "./reactions.js";
 
 export function makeBotAdapter(cfg: ProfileConfig): TgAdapter {
   const token = cfg.telegram.botToken;
@@ -51,18 +52,28 @@ export function makeBotAdapter(cfg: ProfileConfig): TgAdapter {
         };
         await onMessage(msg).catch(() => {});
       });
+      // Сначала init() — упадёт быстро при невалидном токене / сетевом блоке.
+      // Без этого bot.start().catch выше глотал ошибки молча и юзер видел
+      // лишь "Telegram bot запущен", при том что апдейты не приходили.
+      try {
+        await bot.init();
+      } catch (e) {
+        throw new Error(`Telegram bot init failed: ${(e as Error)?.message ?? e}. Проверь BOT_TOKEN (BotFather), доступ к api.telegram.org и что другой инстанс бота не держит long-polling.`);
+      }
+      const me = bot.botInfo;
+      selfInfo = {
+        username: me.username ?? undefined,
+        displayName: [me.first_name, me.last_name].filter(Boolean).join(" ") || undefined
+      };
+      // Запускаем long-polling в фоне. Если оно упадёт (Conflict / 401 / сеть) —
+      // пишем в stderr, чтобы юзер реально видел причину, а не молчаливый рестарт.
       // allowed_updates: включаем message_reaction и все базовые подписки.
       bot.start({
         drop_pending_updates: true,
         allowed_updates: ["message", "edited_message", "callback_query", "message_reaction"]
-      }).catch(() => {});
-      try {
-        const me = await bot.api.getMe();
-        selfInfo = {
-          username: me.username ?? undefined,
-          displayName: [me.first_name, me.last_name].filter(Boolean).join(" ") || undefined
-        };
-      } catch { /* ignore */ }
+      }).catch((e: Error) => {
+        process.stderr.write(`[bot] long-polling stopped: ${e?.message ?? e}\n`);
+      });
     },
     async sendText(chatId, text) {
       if (hasSpoilers(text)) {
@@ -80,11 +91,23 @@ export function makeBotAdapter(cfg: ProfileConfig): TgAdapter {
       }
     },
     async setReaction(chatId, messageId, emoji) {
+      // Telegram Bot API принимает только ограниченный список эмодзи. Если пришёл не из
+      // списка (например 😏, 🙄, 🥺) — нормализуем в близкий доступный, иначе setMessageReaction
+      // молча отдаст 400 и реакция не появится у пользователя.
+      const normalized = normalizeBotReactionEmoji(emoji);
+      if (!normalized) {
+        process.stderr.write(`[bot] reaction "${emoji}" не поддерживается Bot API и нет замены — пропускаем\n`);
+        return;
+      }
       try {
         await bot.api.setMessageReaction(chatId as number, messageId, [
-          { type: "emoji", emoji: emoji as any }
+          { type: "emoji", emoji: normalized as any }
         ]);
-      } catch { /* not all bots can react */ }
+      } catch (e) {
+        // Не глотаем молча: пишем в stderr, чтобы можно было увидеть причину
+        // ("chat not found", "REACTION_INVALID", "PEER_REACTIONS_DISABLED" и т.п.).
+        process.stderr.write(`[bot] setMessageReaction("${normalized}", chat=${chatId}, msg=${messageId}) failed: ${(e as Error)?.message ?? e}\n`);
+      }
     },
     async editText(chatId, messageId, newText) {
       try {

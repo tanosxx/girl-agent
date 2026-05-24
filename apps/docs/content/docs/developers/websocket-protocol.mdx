@@ -1,0 +1,125 @@
+---
+title: WebSocket protocol
+description: /ws/logs/:slug и /ws/status/:slug — стрим событий и статуса
+---
+
+Файл: `src/webui/websocket.ts`. Две точки:
+
+- `wss://<host>/ws/logs/<slug>` — стрим runtime-событий в реальном времени.
+- `wss://<host>/ws/status/<slug>` — стрим snapshot'ов статуса каждые 5 секунд.
+
+Оба регистрируются в `attachWebSockets(server)` и используют `ws` библиотеку.
+
+## Auth
+
+То же, что у REST: cookie `girl_agent_auth` или `Authorization: Bearer ...`. Auth-чек — `isAuthorized(req)` при `upgrade` запросе. Если не прошло — `ws.close(4401, "unauthorized")`.
+
+Для браузера cookie прокидывается автоматически. Для wrapper'а — передавайте header'ы в `WebSocket` (через `ws` библиотеку) или используйте Bearer-token через `Sec-WebSocket-Protocol` (не поддерживается напрямую, нужен прокси).
+
+## `/ws/logs/:slug`
+
+При подключении:
+
+1. Если runtime для слага запущен — высылается **бэклог** из ring-buffer (`bus.recentLogs(slug)`) одним «потоком» сообщений.
+2. Далее — подписка на `bus.onLog(slug, listener)`, каждый `RuntimeEvent` шлётся как JSON-message.
+
+Формат сообщения:
+
+```json
+{ "type": "incoming", "chatId": 123, "text": "...", "t": 1715865000000 }
+{ "type": "outgoing", "chatId": 123, "text": "...", "delay": 4.2, "bubbles": 1, "t": ... }
+{ "type": "score", "score": {...}, "delta": {...}, "t": ... }
+{ "type": "ignored", "chatId": 123, "reason": "asleep", "t": ... }
+{ "type": "info", "text": "...", "t": ... }
+{ "type": "error", "text": "...", "t": ... }
+```
+
+Полностью идентично [Headless protocol](/docs/developers/headless-protocol#события-stdout).
+
+Закрытие подписки — `ws.on("close", () => bus.offLog(slug, listener))`.
+
+## `/ws/status/:slug`
+
+Каждые 5 секунд (`setInterval`) шлёт **сжатый snapshot**:
+
+```json
+{
+  "type": "status",
+  "t": 1715865000000,
+  "state": "running",            // running | stopped | paused | error
+  "startedAt": 1715864000000,
+  "lastError": null,
+  "score": { "interest": 51, ... },
+  "stage": "convinced",
+  "stageNum": 4,
+  "online": true,                 // только userbot — её presence в Telegram
+  "asleep": false,
+  "blocked": false
+}
+```
+
+При первом подключении шлёт snapshot сразу, не ждёт interval.
+
+При `close` — `clearInterval`.
+
+## Ошибки
+
+- `4401` — unauthorized.
+- `4404` — slug не найден (`bus.status(slug).state === "unknown"` И нет config'а).
+- `1011` — internal error в обработчике (баг в коде сервера).
+
+Клиентский код должен **уметь реконнектиться** с экспоненциальным backoff: 1s, 2s, 4s, 8s, max 30s. WebUI делает это автоматически.
+
+## Heartbeat
+
+WebSocket-сервер посылает `ws.ping()` каждые 30 секунд. Клиенты должны отвечать `pong` (стандартное поведение `ws`-клиента). Если pong не приходит за 60с — соединение закрывается.
+
+Для не-браузерных клиентов: убедитесь, что библиотека отвечает на ping (большинство — да).
+
+## Backpressure
+
+Если клиент медленный и `ws.bufferedAmount > 1MB` — события могут начать дропаться. В коде сервера сейчас этого нет (мы шлём всё подряд), но если ваш wrapper еле тянет — это будет видно как растущий буфер. Не делайте лютые DOM-апдейты в WebUI на каждое событие; используйте throttle / batched render.
+
+## Пример клиента (ws JS)
+
+```ts
+const ws = new WebSocket("ws://localhost:3000/ws/logs/alice");
+
+ws.onmessage = (ev) => {
+  const data = JSON.parse(ev.data);
+  console.log(data.type, data);
+};
+
+ws.onclose = (ev) => {
+  if (ev.code === 4401) console.error("auth required");
+  else setTimeout(reconnect, 2000);
+};
+```
+
+## Пример клиента (Node, ws)
+
+```ts
+import WebSocket from "ws";
+
+const ws = new WebSocket("ws://localhost:3000/ws/logs/alice", {
+  headers: { Authorization: "Bearer <token>" }
+});
+
+ws.on("message", (raw) => {
+  const ev = JSON.parse(raw.toString());
+  if (ev.type === "outgoing") console.log("sent:", ev.text);
+});
+
+ws.on("close", () => {
+  console.log("disconnected, retrying...");
+  setTimeout(reconnect, 2000);
+});
+```
+
+## Кому это нужно
+
+- WebUI — frontend подписывается на оба.
+- Дашборды / мониторинг — `/ws/status` достаточно (раз в 5с — не дорого).
+- Внешние интеграции (зеркало в Discord, например) — `/ws/logs` + фильтр по `outgoing`.
+
+Если хочется просто плоский лог в stdout — используйте `--json-events` (headless mode), без WebSocket. Это удобнее для CI.

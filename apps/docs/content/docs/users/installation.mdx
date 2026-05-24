@@ -1,0 +1,299 @@
+---
+title: Установка
+description: Все способы установки girl-agent на Linux, macOS, Windows, Android и Docker.
+---
+
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+import { Callout } from "fumadocs-ui/components/callout";
+import { Step, Steps } from "fumadocs-ui/components/steps";
+
+`girl-agent` поддерживает **Linux x86_64/aarch64**, **macOS x64/arm64**, **WSL**, **Android (Termux)**,
+**Docker** и **Windows**. Минимальная версия Node.js — **18.18+**, рекомендуем 20 или 22.
+
+## Linux, macOS, WSL — одной командой
+
+Самый простой путь — установщик. Он не требует Node на машине: сам скачает официальный
+Node.js 22 LTS в изолированную папку `~/.local/share/girl-agent/runtime/`.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TheSashaDev/girl-agent/master/scripts/install.sh | sh
+```
+
+Что произойдёт:
+- определит OS и архитектуру (linux x64/arm64, macos x64/arm64, wsl);
+- если в системе есть Docker — предложит docker-вариант (полная изоляция);
+- иначе скачает Node.js 22 LTS в `~/.local/share/girl-agent/runtime/`;
+- установит пакет `@thesashadev/girl-agent` в тот же изолированный prefix;
+- положит shim-скрипт `girl-agent` в `~/.local/bin/girl-agent`;
+- **ничего не пишется в `/usr/local/`, `sudo` не нужен**.
+
+### Опции установщика
+
+```bash
+# принудительно через Docker
+curl -fsSL .../install.sh | sh -s -- --docker
+
+# принудительно локальная Node (без Docker)
+curl -fsSL .../install.sh | sh -s -- --local
+
+# конкретная версия пакета
+curl -fsSL .../install.sh | sh -s -- --version=0.4.1
+```
+
+### Удаление
+
+```bash
+rm -rf ~/.local/share/girl-agent ~/.local/bin/girl-agent
+```
+
+Профили (`data/`) при этом не удалятся — они хранятся отдельно (см. ниже).
+
+## Termux (Android)
+
+<Callout type="info">
+  Termux — это Linux-окружение в Android. Можно запустить girl-agent прямо на телефоне.
+</Callout>
+
+<Steps>
+
+<Step>
+
+### Установи Termux
+
+Скачай Termux с [F-Droid](https://f-droid.org/packages/com.termux/) (Play Store-версия
+устарела и не поддерживается).
+
+</Step>
+
+<Step>
+
+### Установи Node.js
+
+```bash
+pkg update && pkg upgrade
+pkg install nodejs
+```
+
+</Step>
+
+<Step>
+
+### Запусти установщик
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TheSashaDev/girl-agent/master/scripts/install.sh | sh
+```
+
+</Step>
+
+<Step>
+
+### (Опционально) разреши работу в фоне
+
+```bash
+termux-wake-lock
+```
+
+Без этого процесс может умирать при блокировке экрана.
+
+</Step>
+
+<Step>
+
+### Запусти
+
+```bash
+girl-agent
+```
+
+WebUI откроется на `http://localhost:3000` — открой в браузере **того же телефона**.
+
+</Step>
+
+</Steps>
+
+## Если у тебя уже есть Node.js ≥ 18.18
+
+```bash
+# одноразовый запуск
+npx @thesashadev/girl-agent
+
+# постоянная установка
+npm install -g @thesashadev/girl-agent
+girl-agent
+```
+
+Обновление: `npm install -g @thesashadev/girl-agent@latest`
+
+## Docker
+
+Полная изоляция от системы. Подходит для серверов.
+
+### Интерактивная первичная настройка
+
+```bash
+docker run -it --rm -p 3000:3000 -v girl-agent-data:/data \
+  ghcr.io/thesashadev/girl-agent:latest
+```
+
+Открой `http://localhost:3000`. Профили будут жить в volume `girl-agent-data`.
+
+### Headless-запуск через config-файл
+
+```bash
+# 1. Создать шаблон config-файла
+docker run --rm ghcr.io/thesashadev/girl-agent:latest server --print-config > bot.json
+# 2. Отредактируй bot.json (вставь token, api-key и т.п.)
+# 3. Запустить в фоне
+docker run -d --name girl-agent --restart=unless-stopped \
+  -v girl-agent-data:/data \
+  -v $PWD/bot.json:/config/bot.json:ro \
+  ghcr.io/thesashadev/girl-agent:latest \
+  server --config /config/bot.json --headless
+```
+
+### Headless через env-vars (k8s secrets, docker compose)
+
+```bash
+docker run -d --name girl-agent --restart=unless-stopped \
+  -v girl-agent-data:/data \
+  -e GIRL_AGENT_MODE=bot \
+  -e GIRL_AGENT_TOKEN=... \
+  -e GIRL_AGENT_API_PRESET=claudehub \
+  -e GIRL_AGENT_API_KEY=... \
+  -e GIRL_AGENT_NAME='Аня' -e GIRL_AGENT_AGE=22 \
+  -e GIRL_AGENT_STAGE=4 \
+  -e GIRL_AGENT_OWNER_ID=123456789 \
+  ghcr.io/thesashadev/girl-agent:latest \
+  server --headless
+```
+
+Список всех env-vars см. в [Server mode](/docs/developers/server-mode).
+
+### docker-compose
+
+В репозитории есть готовый шаблон `docker-compose.example.yml`. Скопируй, отредактируй
+секреты и запусти:
+
+```bash
+docker compose up -d
+```
+
+## Windows
+
+<Callout type="info">
+  Самый быстрый способ на Windows — поставить Node.js и запустить через **npx**. Без
+  установщика, без Docker, без WSL.
+</Callout>
+
+### Через npx (рекомендуем)
+
+<Steps>
+
+<Step>
+
+#### Установи Node.js 22 LTS
+
+Скачай и поставь с [nodejs.org/download](https://nodejs.org/en/download/) — обычный
+`.msi`-инсталлер. Поставь галочку **Add to PATH** при установке.
+
+Проверь в PowerShell:
+
+```powershell
+node --version
+# v22.x.x
+```
+
+</Step>
+
+<Step>
+
+#### Запусти одной командой
+
+```powershell
+npx @thesashadev/girl-agent
+```
+
+Первый раз npm скачает пакет (~30 МБ), потом откроет интерактивный визард прямо в
+PowerShell.
+
+WebUI будет на `http://localhost:3000`.
+
+</Step>
+
+<Step>
+
+#### Хочешь короче — поставь глобально
+
+```powershell
+npm install -g @thesashadev/girl-agent
+girl-agent
+```
+
+Обновление: `npm install -g @thesashadev/girl-agent@latest`.
+
+</Step>
+
+</Steps>
+
+### Десктоп-приложение (нативное)
+
+Если нужен **системный лоток**, автозапуск и нативное окно — есть нативный десктоп-клиент
+на Rust (iced). Скачать готовый бинарь — на странице
+[Releases](https://github.com/TheSashaDev/girl-agent/releases).
+
+Под капотом он ставит тот же Node-пакет, проводит через визард и параллельно поднимает
+локальный WebUI на `http://127.0.0.1:3000`.
+
+Собрать самому (если хочется или нет готового бинаря под твою архитектуру):
+
+```powershell
+cd desktop-rs
+cargo run -p girl-agent-installer   # визард настройки
+cargo run -p girl-agent-desktop     # открыть дашборд
+```
+
+### Через WSL
+
+Если предпочитаешь Linux-окружение:
+
+1. Установи [Ubuntu из Microsoft Store](https://apps.microsoft.com/detail/9pdxgncfsczv)
+2. Запусти Ubuntu и выполни команду из секции **Linux**
+3. WebUI будет доступен на `http://localhost:3000` из Windows-браузера
+
+## Из исходников (для контрибьютеров)
+
+```bash
+git clone https://github.com/TheSashaDev/girl-agent.git
+cd girl-agent
+npm install
+npm run dev          # запустить с tsx (без сборки)
+# или
+npm run build && npm run start
+```
+
+См. [Contributing](/docs/developers/contributing) для гайда по разработке.
+
+## Где хранятся данные
+
+После установки данные профилей лежат:
+
+| Платформа    | Путь                                                                   |
+| ------------ | ---------------------------------------------------------------------- |
+| Linux        | `~/.local/share/girl-agent/data/`                                      |
+| macOS        | `~/Library/Application Support/girl-agent/data/`                       |
+| Windows      | `%APPDATA%\girl-agent\data\`                                           |
+| Docker       | volume `girl-agent-data` или путь, указанный через `-v ...:/data`      |
+| из исходников | `./data/` в папке репозитория                                         |
+| Переопределить | переменная окружения `GIRL_AGENT_DATA=/your/path`                    |
+
+<Callout type="warn">
+  В `data/` лежат **api-ключи, токены, sessionString от Telegram и логи переписки**. Никогда
+  не публикуй эту папку, не коммить в git, не загружай в облако без шифрования.
+</Callout>
+
+## Что дальше
+
+- [Открой WebUI и пройди визард →](/docs/users/setup-wizard)
+- [Разберись с Telegram-режимами →](/docs/users/telegram-modes)
+- [Выбери LLM-провайдер →](/docs/users/llm-providers)

@@ -1,0 +1,66 @@
+---
+title: Для разработчиков
+description: Обзор архитектуры, исходников и интеграционных точек girl-agent
+---
+
+Этот трек — про **код**. Если ты хочешь:
+
+- понять, как girl-agent устроен внутри,
+- встроиться в него (свой LLM-провайдер, свой Telegram-адаптер, свой аддон),
+- использовать REST API или headless-протокол из своего приложения,
+- внести изменения в репозиторий,
+
+— ты здесь.
+
+## С чего начать
+
+Если ты пришёл «прямо в код», достаточно посмотреть две страницы:
+
+1. [Getting started](/docs/developers/getting-started) — клон, установка, dev-цикл.
+2. [Архитектура](/docs/developers/architecture) — карта проекта на одной странице.
+
+Дальше можно нырять в нужный модуль.
+
+## Что внутри
+
+**Архитектура и runtime**
+- [Архитектура](/docs/developers/architecture) — high-level карта.
+- [Runtime](/docs/developers/runtime) — главный цикл, события, команды.
+- [Behavior layer](/docs/developers/behavior-layer) — LLM-решения «отвечать / игнорить / реагировать».
+- [Presence и daily-life](/docs/developers/presence-daily-life) — присутствие, сон, расписание дня.
+- [Agenda engine](/docs/developers/agenda-engine) — отложенные/проактивные сообщения.
+- [Conflict engine](/docs/developers/conflict-engine) — конфликтная модель.
+- [Memory palace](/docs/developers/memory-palace) — иерархическая память.
+- [Storage](/docs/developers/storage) — файловый слой и формат данных.
+
+**Интеграции**
+- [LLM abstraction](/docs/developers/llm-abstraction) — `LLMClient`, `makeLLM`, ретраи, fallback'ы, vision.
+- [Telegram-адаптеры](/docs/developers/telegram-adapters) — `TgAdapter`, bot vs userbot.
+- [MCP-клиент](/docs/developers/mcp) — stdio-транспорт, presets.
+
+**Запуск и протоколы**
+- [CLI и режимы](/docs/developers/cli-modes) — WebUI / server / headless / utilities.
+- [Server mode](/docs/developers/server-mode) — non-TTY автоматизация, env vars, json-конфиг.
+- [Headless protocol](/docs/developers/headless-protocol) — NDJSON-события и команды.
+- [WebUI REST API](/docs/developers/webui-api) — все эндпойнты с примерами.
+- [WebSocket-протокол](/docs/developers/websocket-protocol) — `/ws/logs/:slug` и `/ws/status/:slug`.
+
+**Расширения**
+- [Аддоны (`.gaa`)](/docs/developers/addons-dev) — манифест, упаковка, lifecycle.
+- [Миграции данных](/docs/developers/migrations) — Migration API.
+
+**Контрибьют**
+- [Contributing](/docs/developers/contributing) — сборка, типы, тесты, конвенции.
+- [Релизы](/docs/developers/release) — версионирование и публикация.
+
+## Стек на одной строке
+
+TypeScript (ESM, Node ≥18.18), `tsup` сборка, `tsx` dev, Node built-in `http` для WebUI, `ws` для WebSocket, `grammy` для bot-режима, `telegram` (gramJS) для userbot, OpenAI + Anthropic SDK для LLM, `@modelcontextprotocol/sdk` для MCP, файловое хранилище в Markdown + JSON. Никаких баз данных, никаких сервисов в зависимостях.
+
+## Конвенции
+
+- **ESM-only**: все импорты с расширением `.js` (даже из `.ts`-файлов).
+- **Сообщения и комментарии в коде — на русском.** Имена идентификаторов — английские.
+- **`process.exit` только из CLI-точек**, runtime никогда не убивает процесс.
+- **Никаких глобальных кешей** между профилями — каждый профиль изолирован папкой и `Runtime`-инстансом.
+- **Markdown как структура хранения, а не как UI.** Файлы профиля читает и LLM, и человек.

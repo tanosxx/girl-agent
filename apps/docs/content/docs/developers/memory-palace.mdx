@@ -1,0 +1,107 @@
+---
+title: Memory palace
+description: Иерархическая референсная память, добываемая из логов
+---
+
+Memory palace — это **отдельный слой** памяти, поверх `memory/long-term.md` и `memory/daily/<date>.md`. Идея — структурно класть факты в «комнаты», чтобы LLM мог достать релевантное без вытягивания всех логов в контекст.
+
+Файл: `src/engine/memory-palace.ts`. Миграция, которая включает фичу: `migrations/0114-memory-palace.ts`.
+
+## Файловая иерархия
+
+```
+<profile>/memory/palace/
+  <wing>/              # высокоуровневая область: people, places, events, hobbies, ...
+    <hall>/            # подобласть: people/family, places/uni, hobbies/music
+      <room>/          # ещё уже: people/family/parents, hobbies/music/genres
+        <drawer>.md    # самые мелкие гнёзда: people/family/parents/mom.md
+```
+
+Каждый `.md` — обычный markdown с фактами и/или yaml-frontmatter:
+
+```md
+---
+key: "его мама"
+slug: "mom"
+strength: 7        # как часто он её упоминает (0..10)
+lastSeen: "2026-05-12"
+---
+
+# его мама
+
+- зовут Анна, живёт в Питере
+- он созванивается с ней по воскресеньям
+- она «строгая, но за него горой» — его слова
+```
+
+Глубина — до 4 уровней. Если факт не вписывается ни в какие «комнаты» — кладётся в `memory/palace/_inbox/`.
+
+## Mining
+
+Майнинг — фоновый процесс. Раз в сутки (`dailyMaintenance` после смены даты в её tz) Runtime запускает:
+
+```ts
+await mineUnminedDailyLogs(llm, slug);
+```
+
+Что происходит:
+
+1. Сканирует `memory/daily/*.md` файлы.
+2. Берёт те, у которых нет соответствующего `.mined` маркера.
+3. Для каждого — LLM-вызов с инструкцией «извлеки факты в виде драверов»:
+   ```
+   Дай ответ JSON-массивом:
+   [
+     { "path": "people/family/parents/mom", "key": "его мама",
+       "facts": ["зовут Анна", "живёт в Питере"], "strength": 6 },
+     ...
+   ]
+   ```
+4. Для каждого `path`: читаем существующий драввер, мерджим факты (дедуп), повышаем `strength` и `lastSeen`, пишем обратно.
+5. Маркируем daily-log как `.mined`.
+
+Если LLM падает — daily-log остаётся unminted, через сутки попробуем снова. Это безопасно для производительности и токенов.
+
+## Использование в промпте
+
+`engine/prompt.ts` в `buildSystemPrompt` вызывает `composePalaceContext(slug, hints)`. `hints` строится из последних N сообщений в активной истории:
+
+- если в диалоге появилось слово «мама» / «мать» — добавить факты из `people/family/parents/mom.md`,
+- если упомянуто «универ» — из `places/uni/*.md`,
+- и т.п.
+
+Релевантные драверы прикладываются под маркером `# PALACE — релевантные комнаты:` в системный промпт.
+
+Это **дешевле**, чем класть все daily-логи: память хранится бессрочно, а в контекст приходит только то, что нужно для текущего диалога.
+
+## API
+
+```ts
+// mining
+mineUnminedDailyLogs(llm: LLMClient, slug: string): Promise<{ minted: number; skipped: number }>
+
+// чтение
+readPalaceDrawer(slug: string, path: string): Promise<{ key?: string; facts: string[]; strength: number } | null>
+listPalacePaths(slug: string, prefix?: string): Promise<string[]>
+
+// запись
+upsertPalaceDrawer(slug: string, path: string, patch: { facts: string[]; strength?: number; lastSeen?: string }): Promise<void>
+
+// контекст
+composePalaceContext(slug: string, hints: string[], maxBytes?: number): Promise<string>
+```
+
+`composePalaceContext` сортирует по `strength` и обрезает по `maxBytes` (по умолчанию ~2KB).
+
+## Команды и UI
+
+- В WebUI: `GET /api/profiles/:slug/palace?path=people/family` возвращает дерево.
+- Headless: `palace-tree` event при mining'е.
+- CLI: ничего отдельного — палац — это «внутри» daily maintenance.
+
+## Конвенции
+
+- **`path` — slug'ed, lowercase, без пробелов.** `"people/family/parents/mom"`, не `"People/Family/My Mom"`.
+- **`strength` — int 0..10.** При повторных встречах факта `min(10, strength + 1)`.
+- **Никогда не удаляйте драверы автоматически.** Только понижение `strength`. Удаление — вручную через UI/CLI.
+- **`facts` — короткие фразы**, не предложения. Идеально: «зовут Анна», «живёт в Питере», а не «Его маму зовут Анной и она живёт в Питере».

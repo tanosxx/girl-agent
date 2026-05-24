@@ -1,0 +1,120 @@
+---
+title: Структура репозитория
+description: Карта папок и ответственностей
+---
+
+```
+girl-agent/
+├── src/
+│   ├── cli.ts                   # CLI entry: WebUI / utilities / addon / update
+│   ├── server.ts                # Подкоманда `server` (non-TTY automation)
+│   ├── headless.ts              # NDJSON-протокол для desktop wrapper
+│   ├── types.ts                 # Все core-типы (ProfileConfig, LLMPreset, ...)
+│   │
+│   ├── engine/                  # Runtime "ум" — поведение, память, конфликты
+│   │   ├── runtime.ts           # Главный класс Runtime + EventEmitter
+│   │   ├── behavior-tick.ts     # LLM-решение "что делать с входящим"
+│   │   ├── prompt.ts            # buildSystemPrompt + ConversationTurn
+│   │   ├── presence.ts          # Расчёт онлайн/сон/паттерны
+│   │   ├── online-tick.ts       # Heartbeat онлайна для userbot (Issue #81)
+│   │   ├── daily-life.ts        # Расписание дня — что она "делает сейчас"
+│   │   ├── daily-summarizer.ts  # Закрытие сессии в memory/daily/{date}.md
+│   │   ├── agenda.ts            # Extract/due/mark — очередь проактивных пингов
+│   │   ├── conflict.ts          # Эскалация / cold-period / autoresolve
+│   │   ├── memory-palace.ts     # Майнинг логов в hierarchical memory
+│   │   ├── realism.ts           # Realism notes + timeline advancement
+│   │   ├── reflect.ts           # Применение moodDelta + maybeReflect
+│   │   ├── stage-transitions.ts # Smart stage transitions (Task #4)
+│   │   ├── deletion-handler.ts  # Реакция на удалённые сообщения юзера
+│   │   ├── emoji-reaction-handler.ts # Реакция на эмодзи-реакции юзера
+│   │   ├── media.ts             # describeIncomingMedia + image parts
+│   │   ├── stickers.ts          # Стикер-библиотека профиля
+│   │   ├── typos.ts             # Реалистичные опечатки
+│   │   ├── persona-gen.ts       # Генерация persona/speech/communication
+│   │   ├── hormones.ts          # Цикл настроения (PMS-окно и т.п.)
+│   │   └── security.ts          # Sanitize + jailbreak detect
+│   │
+│   ├── llm/
+│   │   └── index.ts             # makeLLM, LLMClient, ChatMessage, ретраи
+│   │
+│   ├── telegram/
+│   │   ├── index.ts             # TgAdapter contract, IncomingMessage
+│   │   ├── bot.ts               # grammy-based bot
+│   │   ├── userbot.ts           # gramJS userbot
+│   │   ├── remote-auth.ts       # Web-flow для логина в userbot
+│   │   └── markdown.ts          # Markdown → TG entities
+│   │
+│   ├── storage/
+│   │   └── md.ts                # DATA_ROOT, profileDir, readMd/writeMd, configs
+│   │
+│   ├── presets/
+│   │   ├── llm.ts               # Каталог LLM-провайдеров
+│   │   ├── stages.ts            # 9 стадий отношений
+│   │   ├── communication.ts     # 5 communication-пресетов
+│   │   └── mcp.ts               # MCP-presets
+│   │
+│   ├── migrations/              # Data-миграции, выполняются на update
+│   │   ├── index.ts
+│   │   ├── 0112-...ts
+│   │   ├── 0113-...ts
+│   │   └── 0114-...ts
+│   │
+│   ├── mcp/
+│   │   └── client.ts            # startMcpServers (stdio transport)
+│   │
+│   ├── config/
+│   │   ├── age.ts               # Кламп возраста
+│   │   └── llm-update.ts        # applyLLMUpdate + describeLLM
+│   │
+│   ├── data/
+│   │   ├── names.ts             # Списки имён RU/UA
+│   │   └── timezones.ts         # parseTzFlag, defaultTzForNationality
+│   │
+│   ├── oauth/
+│   │   └── girlai.ts            # OAuth refresh для GirlAI gateway
+│   │
+│   └── webui/
+│       ├── server.ts            # startWebUIServer
+│       ├── http.ts              # Router, HttpError, parseBody
+│       ├── auth.ts              # Cookie/bearer auth
+│       ├── static.ts            # Статика из webui/dist
+│       ├── websocket.ts         # /ws/logs/:slug, /ws/status/:slug
+│       ├── runtime-bus.ts       # EventBus: runtime ↔ http/ws
+│       ├── addons.ts            # Addon manager (.gaa lifecycle)
+│       ├── assistant-knowledge.ts # Контекст-провайдер для UI-ассистента
+│       └── routes/
+│           ├── profiles.ts      # CRUD профилей и команды runtime
+│           ├── presets.ts       # GET /api/presets/*
+│           ├── addons.ts        # /api/addons/*
+│           ├── system.ts        # /api/system/*
+│           ├── auth.ts          # /api/auth/*
+│           ├── tg-auth.ts       # Web-flow логина в userbot
+│           └── assistant.ts     # UI-ассистент с контекстом
+│
+├── webui/                       # React + Vite фронт (отдельный package.json)
+│   ├── package.json
+│   └── src/...
+│
+├── scripts/
+│   ├── install.sh               # one-liner installer
+│   └── ...
+│
+├── docker/
+├── package.json
+├── tsconfig.json
+└── tsup.config.ts
+```
+
+## Точки входа в исполнение
+
+| Что | Где | Когда вызывается |
+|-----|-----|------------------|
+| `npx girl-agent` | `src/cli.ts → main()` | WebUI (по умолчанию) |
+| `npx girl-agent server …` | `src/server.ts → runServer()` | non-TTY automation |
+| `npx girl-agent --json-events` | `src/headless.ts → runHeadlessJsonEvents()` | desktop wrapper |
+| `npx girl-agent update` | `src/migrations/index.ts → runMigrations()` | apply data migrations |
+| `npx girl-agent addon pack/init` | `src/cli.ts → runAddonCommand()` | dev-утилиты для аддонов |
+
+## Что не входит в коммит
+
+`dist/`, `webui/dist/`, `node_modules/`, `data/`, `.dev-data/`, IDE-папки. Подробности — в `.gitignore`.

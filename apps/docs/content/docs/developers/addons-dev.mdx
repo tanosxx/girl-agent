@@ -1,0 +1,238 @@
+---
+title: Разработка аддонов (.gaa)
+description: Структура аддона, manifest, settings, реестр
+---
+
+Аддоны — это zip-файлы с расширением `.gaa`, которые накатывают на профиль (или глобально):
+
+- файлы (`files/persona.md`, `files/speech.md`, и т.п.) — копируются в папку профиля;
+- patch конфига (`config.patch.json`) — мёрджится в `config.json`;
+- тему (`theme.css`) — копируется в `~/.local/share/girl-agent/addons/theme-<id>.css` и подгружается WebUI;
+- code patch (`code.patch`) — применяется через `git apply` к репо (только для local dev'а, **не** рекомендуется в production).
+
+Спека реализации: `src/webui/addons.ts`.
+
+## Структура
+
+```
+my-addon/
+├── manifest.json        # обязательно
+├── README.md            # опционально, показывается в WebUI
+├── files/               # опционально
+│   ├── persona.md
+│   ├── speech.md
+│   └── memory/long-term.md
+├── config.patch.json    # опционально
+├── theme.css            # опционально
+└── code.patch           # опционально (dev only)
+```
+
+### `manifest.json`
+
+```json
+{
+  "id": "my-addon",
+  "name": "My Addon",
+  "description": "Что делает этот аддон",
+  "version": "1.0.0",
+  "author": "you <you@example.com>",
+  "homepage": "https://github.com/you/my-addon",
+  "tags": ["persona", "style"],
+  "compatibility": ">=0.4.0",
+  "dependencies": ["other-addon-id"],
+  "settings": [
+    {
+      "key": "tone",
+      "label": "Тон",
+      "type": "select",
+      "options": [
+        { "value": "warm", "label": "тёплый" },
+        { "value": "cold", "label": "холодный" }
+      ],
+      "default": "warm",
+      "required": true
+    },
+    {
+      "key": "useEmojis",
+      "label": "Использовать эмодзи",
+      "type": "boolean",
+      "default": true
+    }
+  ]
+}
+```
+
+`validateManifest` требует `id`, `name`, `description`, `version`. Остальное — опционально.
+
+### `files/`
+
+Содержимое попадает в `data/<slug>/<rel-path>`:
+
+```
+files/
+  persona.md          → data/alice/persona.md
+  speech.md           → data/alice/speech.md
+  memory/long-term.md → data/alice/memory/long-term.md
+```
+
+Файлы **полностью перезаписывают** существующие в профиле. Если хотите догнать к существующему — используйте `config.patch.json` или попросите пользователя обновить вручную.
+
+`profileSlug` обязателен при установке: аддон без `profileSlug` (например, тема) **не** копирует файлы. Это намеренно — иначе аддон бы лез ко всем профилям.
+
+### `config.patch.json`
+
+Deep-merge в `config.json`:
+
+```json
+{
+  "ignoreTendency": 60,
+  "sleepFrom": 1,
+  "sleepTo": 9,
+  "communication": {
+    "messageStyle": "bursty",
+    "lifeSharingProactive": "high"
+  }
+}
+```
+
+Объекты мёрджатся (`{a:{x:1}}` + `{a:{y:2}}` = `{a:{x:1,y:2}}`), массивы — заменяются целиком. Не пытайтесь патчить `slug` / `createdAt` — server-сторона ничего не сделает плохого, но и пользы — ноль.
+
+### `theme.css`
+
+Произвольный CSS, который WebUI подгружает в `<head>` (если аддон `enabled`):
+
+```css
+:root {
+  --girl-agent-bg: #1a0033;
+  --girl-agent-fg: #ffccff;
+  --girl-agent-accent: #ff69b4;
+}
+
+body.girl-agent {
+  font-family: "Comic Sans MS";
+}
+```
+
+Темы — единственный аддон, который **не требует** `profileSlug` при установке.
+
+### `code.patch` (dev only)
+
+Если в архиве есть `code.patch` — он применяется через `git apply` к корню репо girl-agent. Это **очень опасно** для production:
+
+- может сломать репо;
+- может ввести произвольный код, который выполняется при следующем `npm run build` / запуске.
+
+В UI стоит предупреждение, и в коде есть `git apply --check` перед `git apply`. Если check не прошёл — patch не применяется, в `applied[]` пишется ошибка.
+
+## Жизненный цикл
+
+```
+.gaa файл / URL / реестр
+        │
+        ▼
+   unzip + validate         # unpackGaa
+        │
+        ▼
+   installFromDir(addonDir, profileSlug)
+        │
+        ├── копирует files/* → data/<slug>/*
+        ├── применяет config.patch.json к data/<slug>/config.json
+        ├── копирует theme.css → addons/theme-<id>.css
+        ├── (опц.) применяет code.patch
+        ├── сохраняет копию аддона в addons/<id>/
+        └── пишет installed.json
+```
+
+Реестр аддонов: `addons/installed.json` — JSON-массив `InstalledAddon[]` со всеми метаданными, версиями, source, enabled, settings.
+
+## Реестр
+
+Регистр-реестр (default): `https://raw.githubusercontent.com/TheSashaDev/girl-agent-addons/main/index.json`.
+
+Можно переопределить:
+
+```bash
+GIRL_AGENT_ADDON_REGISTRY=https://my.host/addons.json girl-agent
+```
+
+Формат `index.json`:
+
+```json
+{
+  "addons": [
+    {
+      "id": "vampire",
+      "name": "Vampire vibe",
+      "description": "Готическая стилистика, ночные привычки",
+      "version": "1.2.0",
+      "author": "...",
+      "tags": ["persona"],
+      "downloadUrl": "https://.../vampire-1.2.0.gaa"
+    }
+  ]
+}
+```
+
+`downloadUrl` — необязателен. Если нет, аддон ставится «легасно» (JSON-only). Но в большинстве случаев аддон содержит файлы, и `downloadUrl` нужен.
+
+## Сборка `.gaa`
+
+```bash
+girl-agent addon pack ./my-addon
+# создаст ./my-addon.gaa
+```
+
+Под капотом: `packGaa(addonDir)` валидирует `manifest.json` и запускает `zip -r my-addon.gaa my-addon` относительно `parentDir`. Архив содержит **папку**, не плоские файлы.
+
+## Скелет нового аддона
+
+```bash
+girl-agent addon init my-addon
+```
+
+Создаёт:
+
+```
+my-addon/
+├── manifest.json
+├── README.md
+├── files/persona.md
+└── config.patch.json
+```
+
+`manifest.json` — с уникальным id, version 0.1.0, без settings. `files/persona.md` — с подсказкой. `config.patch.json` — пустой.
+
+## Кодинг-стандарты
+
+- **id** — kebab-case, ASCII only, не больше 60 символов.
+- **version** — semver.
+- **README.md** обязательно содержит как минимум: одну фразу о том, что меняет аддон, и как его проверить после установки.
+- **`files/`** — только текстовые файлы. Бинари / большие архивы не нужны; если очень надо — кладите ссылку в `README` и пусть пользователь скачивает.
+- **`config.patch.json`** — мин. набор полей. Не переписывайте `slug`, `createdAt`, `telegram.botToken`, `llm.apiKey`. Этого делать нельзя.
+- **`code.patch`** — не используйте в production. Если очень хочется — пишите в README, что аддон меняет код, и предлагайте пользователю review-ить patch вручную.
+
+## Тестирование
+
+```bash
+# Создаём новый профиль для теста
+girl-agent server --print-config > test.json
+# отредактируй имя на "test-addon"
+girl-agent server --config test.json --no-start
+
+# Ставим аддон через CLI (нет такой команды; через UI):
+#   curl -X POST http://localhost:3000/api/addons/install-file \
+#     -H "Content-Type: application/json" \
+#     -d '{"gaaBase64":"...", "profileSlug":"test-addon"}'
+
+# Проверяем
+cat ~/.local/share/girl-agent/data/test-addon/persona.md
+cat ~/.local/share/girl-agent/data/test-addon/config.json
+```
+
+После теста — `DELETE /api/addons/<id>` или вручную удалить из `addons/installed.json` + папку.
+
+## Безопасность
+
+Аддоны — **доверенный контент**. Они работают под тем же uid, что и girl-agent, имеют доступ ко всем профилям, могут перетереть `config.json` (включая API ключи в `llm.apiKey`). Не ставьте `.gaa` из неизвестных источников.
+
+UI/REST не проверяет подпись аддонов. Если нужна верификация — оборачивайте установку в свой pipeline (например, `sha256` проверка через CI).

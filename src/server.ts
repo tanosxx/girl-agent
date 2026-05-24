@@ -14,6 +14,7 @@ import { runHeadlessJsonEvents } from "./headless.js";
 import { checkForPendingMigrations, runMigrations, formatUpdateWarnings } from "./migrations/index.js";
 import type { ProfileConfig, ClientMode, Nationality, StageId, LLMProto, PrivacyMode } from "./types.js";
 import { applyLLMUpdate, describeLLM } from "./config/llm-update.js";
+import { parseTelegramProxyInput } from "./telegram/proxy-parse.js";
 
 /**
  * Server / automation entrypoint.
@@ -361,33 +362,7 @@ function validateConfig(raw: unknown): ProfileConfig {
 }
 
 function parseTelegramProxy(raw: string | undefined): ProfileConfig["telegram"]["proxy"] | undefined {
-  if (!raw?.trim()) return undefined;
-  try {
-    const url = new URL(raw);
-    if (url.protocol === "tg:" && url.hostname === "proxy") {
-      const ip = url.searchParams.get("server")?.trim();
-      const port = Number(url.searchParams.get("port"));
-      const secret = url.searchParams.get("secret")?.trim();
-      if (!ip || !Number.isInteger(port) || port <= 0 || !secret) return undefined;
-      return { ip, port, MTProxy: true, secret };
-    }
-    if (url.protocol !== "socks4:" && url.protocol !== "socks5:") return undefined;
-    const socksType = url.protocol === "socks4:" ? 4 : 5;
-    const port = Number(url.port);
-    if (!url.hostname || !Number.isInteger(port) || port <= 0) return undefined;
-    return {
-      ip: url.hostname,
-      port,
-      socksType,
-      username: url.username ? decodeURIComponent(url.username) : undefined,
-      password: url.password ? decodeURIComponent(url.password) : undefined
-    };
-  } catch {
-    const [host, portRaw] = raw.split(":");
-    const port = Number(portRaw);
-    if (!host || !Number.isInteger(port) || port <= 0) return undefined;
-    return { ip: host, port, socksType: 5 };
-  }
+  return parseTelegramProxyInput(raw);
 }
 
 // ---------------- ops scaffolds ----------------

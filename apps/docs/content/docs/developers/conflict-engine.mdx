@@ -1,0 +1,104 @@
+---
+title: Conflict engine
+description: Конфликтная модель — escalate, cold-period, autoresolve
+---
+
+Файл: `src/engine/conflict.ts`. Состояние хранится в `relationship.md` (yaml frontmatter), точнее — в полях `conflict` и `score.conflictMeters`.
+
+## Структура
+
+```ts
+export interface ConflictState {
+  level: 0 | 1 | 2 | 3;              // 0 нет, 1 ссора, 2 серьёзная, 3 разрыв
+  reason?: string;                    // что её бесит
+  startedAt?: string;                 // ISO timestamp эскалации
+  coldUntil?: string;                 // ISO — пока активен холод
+  apologized?: boolean;               // он извинился
+  resolveAt?: string;                 // автосброс
+}
+
+export interface ConflictMeters {
+  rudeness: number;       // 0..100 — он грубит
+  flakiness: number;      // 0..100 — он динамит / не отвечает
+  inconsistency: number;  // 0..100 — он мутит / несерьёзно
+  pressure: number;       // 0..100 — он давит / обижается на пустом
+  jealousy: number;       // 0..100 — он ревнует
+}
+```
+
+## Counters
+
+Каждое сообщение прокручивается через `updateConflictMeters(meters, incoming, decisionContext)`. Это **не LLM-вызов**, а быстрая эвристика на ключевых словах + анализ задержек ответа.
+
+| Триггер | Меттер |
+|---------|--------|
+| мат, оскорбления, угрозы | rudeness +N |
+| «забил», «занят я», > 24ч без ответа | flakiness +N |
+| «у меня есть подружка», «не пиши пока» | inconsistency +N |
+| «когда уже встретимся», обиды | pressure +N |
+| «с кем ты», «покажи телефон» | jealousy +N |
+
+Меттеры экспоненциально затухают (`decay`), чтобы старые проступки не висели вечно. См. `decayConflictMeters`.
+
+## Эскалация
+
+`maybeEscalate(state, meters)`:
+
+- если суммарный score > 220 → `level: 1`, `coldUntil` = +30 минут;
+- если > 320 → `level: 2`, `coldUntil` = +6 часов;
+- если > 450 → `level: 3`, **stage может прыгнуть в `dumped`** (через `applyDumped`).
+
+После эскалации в `relationship.md` записывается короткая причина (одно предложение от LLM, основанное на текущей сессии).
+
+## Cold-period
+
+Пока `coldUntil > now`:
+
+```ts
+ctx.conflictColdActive = true;
+```
+
+В behavior layer это даёт:
+
+- 80% шанс на ignore без LLM-вызова;
+- остальные 20% — короткий, сухой ответ;
+- запрет тёплых реакций (даже если стадия `dating-stable`);
+- запрет sticker'ов в ответе.
+
+## Apology / resolve
+
+`registerApology(state)`:
+
+- ставит `apologized = true`;
+- сокращает `coldUntil` на 50% или до `+10 мин`;
+- понемногу понижает `pressure/rudeness` меттеры.
+
+`autoResolve()`:
+
+- если `level === 1` и прошло > 6 часов без новых триггеров → `level = 0`.
+- если `level === 2` и `apologized === true` → `level = 1` с укороченным холодом.
+
+## Storage
+
+```ts
+readConflict(slug: string): Promise<ConflictState>
+writeConflict(slug: string, state: ConflictState): Promise<void>
+readConflictMeters(slug: string): Promise<ConflictMeters>
+writeConflictMeters(slug: string, m: ConflictMeters): Promise<void>
+```
+
+Имплементация — yaml-front matter в `relationship.md` (см. `storage/md.ts → updateRelationshipMeta`).
+
+## Где используется
+
+- `Runtime.handleIncoming` — читает `ConflictState`, передаёт в `behaviorTick` как `ctx.conflict` + `ctx.conflictColdActive`.
+- `engine/prompt.ts` — добавляет в system-prompt секцию `# КОНФЛИКТ` (краткое описание + причина), если `level > 0`.
+- `engine/reflect.ts` — после каждого сообщения вызывает `updateConflictMeters`.
+- WebUI — `GET /api/profiles/:slug/relationship` возвращает `score`, `conflict`, `meters`.
+
+## Тонкости
+
+- **Конфликт никогда не «удаляется» из логов.** Только meters и `level`. Лог дня уже содержит обиды; даже после autoresolve LLM продолжает помнить.
+- **`level: 3` (dumped)** — это финал. После него `score.attraction` обнуляется, stage прыгает в `dumped` (id=9), persona-prompt начинает делать её холодной/враждебной.
+- **Восстановиться из `dumped` тяжело.** Нужны: extended cold-off period, явные извинения, **дни** реального времени.
+- **Меттеры экспортируются в behavior-tick** только агрегированно (top-3 причины). LLM получает «он часто динамит и ревнует», а не «flakiness:62, jealousy:48».

@@ -1,0 +1,152 @@
+---
+title: Архитектура
+description: Карта girl-agent на одной странице
+---
+
+## Картина в одной диаграмме
+
+```
+                       ┌────────────────────────────────────────────┐
+                       │                  CLI entry                  │
+                       │  src/cli.ts  → mode dispatch (mri argv)     │
+                       └────┬───────────────┬───────────────────────┘
+                            │               │
+              ┌─────────────▼──┐     ┌──────▼─────────┐     ┌──────────────┐
+              │   WebUI mode   │     │  server mode   │     │ headless mode│
+              │  http + ws     │     │  no TTY, NDJSON │     │ stdin/stdout │
+              │  (default)     │     │ + env-driven    │     │ NDJSON       │
+              └────────┬───────┘     └────────┬────────┘     └──────┬───────┘
+                       │                      │                     │
+                       └──────────┬───────────┘                     │
+                                  │                                 │
+                          ┌───────▼────────┐                ┌───────▼───────┐
+                          │   Runtime      │ ◄──────────────┤  Runtime API  │
+                          │ (engine/...)   │  events/cmds   │  (commands)   │
+                          └───────┬────────┘                └───────────────┘
+                  ┌───────────────┼───────────────────────────┐
+                  │               │                           │
+            ┌─────▼──────┐  ┌─────▼─────┐  ┌──────────────┐  │
+            │  Telegram  │  │   LLM     │  │   Storage    │  │
+            │  adapter   │  │  client   │  │  (FS / md)   │  │
+            │ bot/userbot│  │ OpenAI /  │  │ profile dir  │  │
+            └────────────┘  │ Anthropic │  └──────────────┘  │
+                            └───────────┘                     │
+                                                              │
+                                  ┌───────────────────────────▼┐
+                                  │ Behavior / presence /      │
+                                  │ daily-life / agenda /      │
+                                  │ conflict / memory palace   │
+                                  └────────────────────────────┘
+```
+
+## Слои
+
+1. **Entry layer** — `cli.ts`, `server.ts`, `headless.ts`. Парсит argv/env, выбирает режим. Никакой логики поведения тут нет.
+2. **Runtime** — `engine/runtime.ts`. Главный объект, который держит Telegram-соединение, очередь отложенных ответов, таймеры agenda/daily, EventEmitter для UI. Подробнее: [Runtime](/docs/developers/runtime).
+3. **Behavior layer** — `engine/behavior-tick.ts`. LLM-вызов «что делать с этим сообщением»: ответить/проигнорить/реакция/задержка. Возвращает строгий JSON. Подробнее: [Behavior layer](/docs/developers/behavior-layer).
+4. **Состояния и фоны** — `engine/presence.ts`, `engine/daily-life.ts`, `engine/agenda.ts`, `engine/conflict.ts`, `engine/memory-palace.ts`. Каждый — отдельный «движок» с собственным состоянием и I/O.
+5. **Интеграционный слой** — `llm/`, `telegram/`, `mcp/`. Скрывает внешние API за минимальными интерфейсами (`LLMClient`, `TgAdapter`, `McpHandle`).
+6. **Storage** — `storage/md.ts`. Один контракт: файлы и папки в `DATA_ROOT/<slug>/...`. Других вариантов хранения нет.
+7. **Surface** — `webui/` и `headless.ts`. Превращают события Runtime в HTTP/WS или NDJSON.
+
+## Главный data-flow (входящее сообщение)
+
+```
+Telegram                                         (1)  IncomingMessage
+   │
+   ▼
+TgAdapter.start(onMessage)                       (2)  handleIncoming(m)
+   │
+   ▼
+Runtime.handleIncoming                           (3)  фильтры (privacy, owner, deletion, reaction)
+   │                                                 + media, history
+   ▼
+behaviorTick(llm, cfg, recent, incoming, ctx)    (4)  decision JSON
+   │
+   ▼
+scheduleReply(... delaySec ...)                  (5)  таймер
+   │ (через N секунд)
+   ▼
+generateAndSend                                   (6)  buildSystemPrompt + llm.chat
+   │
+   ▼
+TgAdapter.sendText / sendSticker / setReaction   (7)  пузыри, опечатки, иногда стикер
+   │
+   ▼
+storage: appendSessionLog, writeRelationship      (8)  log/{date}.md, relationship.md
+   │
+   ▼
+event bus: incoming/outgoing/score/error          (9)  WebUI + headless подписаны
+```
+
+## Главный data-flow (проактивное сообщение)
+
+```
+agenda.json в storage         ┐
+   │                           │
+   ▼                           │ tickAgenda() каждые 60с
+dueAgendaItems(now)            │
+   │                           │
+   ▼                           ▼
+composeProactiveMessage  →  llm.chat (с persona/history контекстом)
+   │
+   ▼
+TgAdapter.sendText  →  markAgendaFired  →  log
+   │
+   ▼
+если придёт ответ — decideAfterProactiveResponse решит,
+снять ли item, перепланировать ли, или продолжить диалог
+```
+
+## Главный data-flow (memory)
+
+```
+session log/{YYYY-MM-DD}.md (всё, что произошло за день)
+   │
+   ▼  daily-summarizer закрывает сессию
+memory/daily/{YYYY-MM-DD}.md  (саммари дня)
+   │
+   ▼  memory-palace mineUnminedDailyLogs (асинхронно, фоном)
+memory/palace/<wing>/<hall>/<room>/<drawer>.md
+                                  (структурированные «комнаты» памяти)
+```
+
+Семантически слои разделены так:
+- **долгосрочное** — `memory/long-term.md` + `memory/facts.md`.
+- **эпизодическое** — `memory/episodes/<name>.md`.
+- **повседневное** — `memory/daily/<date>.md`.
+- **референсное** — `memory/palace/...` (иерархия).
+
+Все читаются в `buildSystemPrompt` (см. `engine/prompt.ts`).
+
+## События
+
+`Runtime` — `EventEmitter`. Каждое событие — `RuntimeEvent`:
+
+```ts
+interface RuntimeEvent {
+  type: "incoming" | "outgoing" | "ignored" | "score" | "info" | "error";
+  text?: string;
+  chatId?: number | string;
+  reason?: string;
+  score?: unknown;
+}
+```
+
+Все surface'ы (WebUI / headless) — это просто подписчики на `event` + ручки на runtime-команды (status/why/wake/reset/...). Логика не зависит от того, кто слушает.
+
+## Что НЕ является архитектурой
+
+- **Нет очереди задач / job runner.** Всё — таймеры на `setTimeout/setInterval` в одном процессе.
+- **Нет БД.** Только файлы и `JSON.parse(readFileSync(...))`.
+- **Нет сети между модулями.** WebUI и runtime — один процесс, один EventBus.
+- **Нет глобального state.** Один профиль = один `Runtime`. Несколько профилей — несколько инстансов, изолированных папкой данных.
+- **Нет background-worker'а для сборки персоны.** Persona-pack генерируется один раз на создание профиля; всё остальное — реактивно.
+
+## Что важно понимать перед тем, как лезть глубже
+
+- **LLM-вызовы сериализованы** глобально (`SerializedLLMClient` в `llm/index.ts`). Это для того, чтобы Anthropic не отвечал 429 на конкурирующие вызовы от одного процесса.
+- **Behavior tick — JSON-mode LLM**. Если модель не умеет `response_format`, есть автоматический fallback на `json_object` → `text`.
+- **Behavior tick может быть и без LLM** — например, в активном диалоге или при cold-конфликте есть детерминированные ветки. Это сделано чтобы не сжигать токены на каждое «привет».
+- **TG-userbot держит сессию в Memory/StringSession**. После логина строка сессии хранится в `config.json` профиля (см. `telegram/userbot.ts`).
+- **WebUI — staticfile-сервер + REST**. Никаких SSR, никакого Next. Один React-бандл из `webui/dist`.

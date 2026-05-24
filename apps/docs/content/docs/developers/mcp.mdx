@@ -1,0 +1,71 @@
+---
+title: MCP-клиент
+description: Model Context Protocol — спавнинг серверов через stdio
+---
+
+girl-agent поддерживает [MCP](https://modelcontextprotocol.io/) серверы как внешние процессы. Они дают LLM доступ к инструментам (читать веб, время, файлы, и т.п.) — в перспективе, если ваша модель умеет tool-calling, MCP-инструменты подключаются автоматически.
+
+Файл: `src/mcp/client.ts`. Пресеты: `src/presets/mcp.ts`.
+
+## Контракт
+
+```ts
+export interface McpHandle {
+  id: string;                                  // id пресета
+  client: Client;                              // @modelcontextprotocol/sdk Client
+  tools: Array<{ name: string; description?: string; inputSchema?: unknown }>;
+  close(): Promise<void>;                      // graceful kill
+}
+
+export async function startMcpServers(cfg: ProfileConfig): Promise<McpHandle[]>;
+```
+
+`startMcpServers` смотрит на `cfg.mcp` (если есть), для каждой записи вызывает `spawnMcpServer` через `StdioClientTransport`:
+
+```ts
+const transport = new StdioClientTransport({ command, args, env });
+const client = new Client({ name: "girl-agent", version }, { capabilities: {} });
+await client.connect(transport);
+const tools = (await client.listTools()).tools;
+```
+
+Закрытие — `client.close()` + завершение дочернего процесса.
+
+## Где это в Runtime
+
+В коде runtime'а сейчас (v0.4.x) MCP-инструменты **не передаются в LLM-вызов автоматически**. Они спавнятся, мы знаем их имена, но `chat()` их не передаёт. Это сделано осознанно: модели, которые мы рекомендуем (Claude / GPT через наш `LLMClient`), не имеют сейчас единой схемы tool calls в нашем коде. UI для MCP в большинстве пунктов скрыт.
+
+Если вам нужны MCP — есть два пути:
+
+1. **Hook в generate/behavior**: добавить в свой fork код, который мерджит `tools` в `chat()`-параметры (для OpenAI — `tools: [...]`, для Anthropic — `tools: [...]`). Парсить ответ, выполнять `client.callTool(...)`, и кормить результат обратно в conversation. Это требует серьёзной перестройки `engine/runtime.ts`.
+2. **Использовать MCP сторонне** — например, чтобы дать аддону доступ к веб / времени / памяти, и через addon-config привязать его действия.
+
+## Пресеты
+
+`src/presets/mcp.ts` содержит список «известных» MCP-серверов с `command/args/env`. Например:
+
+```ts
+export const MCP_PRESETS: McpPreset[] = [
+  { id: "time", command: "uvx", args: ["mcp-server-time"], description: "текущее время" },
+  { id: "fetch", command: "uvx", args: ["mcp-server-fetch"], description: "fetch URL" },
+  ...
+];
+```
+
+`McpPreset.command/args` должны быть доступны в `$PATH`. Иначе `spawn` падает с ENOENT.
+
+## Безопасность
+
+MCP-серверы — это **сторонние процессы**. Они получают:
+
+- stdin/stdout от girl-agent (контролируются);
+- environment, который вы прокинули в `env`;
+- доступ к файлам **процесса girl-agent** (тот же uid).
+
+Соответственно: **не запускайте недоверенные MCP-серверы** на production-окружении. Не давайте им $HOME / data-dir, если не понимаете, что они делают.
+
+## Конвенции
+
+- **Не блокируйте Runtime на старте.** Если MCP не запустился — пишите warning, продолжайте без него.
+- **`close()` обязателен** при `Runtime.stop()`. Иначе остаются zombie-процессы.
+- **Не присваивайте MCP-серверам глобальный state в нашем коде.** Один Runtime = свой набор `McpHandle[]`.

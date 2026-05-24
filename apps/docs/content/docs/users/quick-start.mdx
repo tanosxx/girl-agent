@@ -1,0 +1,192 @@
+---
+title: Быстрый старт за 5 минут
+description: Минимум шагов до первого «привет» от персонажа в Telegram.
+---
+
+import { Step, Steps } from "fumadocs-ui/components/steps";
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+
+Если хочешь сразу попробовать — этот путь самый быстрый. Установка → токен бота → ключ
+LLM → запуск. Всё через WebUI, без редактирования файлов.
+
+<Callout type="info">
+  Понадобятся: телефон или второй Telegram-аккаунт (для бота), 10 минут времени, и
+  оплачиваемый или бесплатный ключ от LLM. Бесплатный вариант — **Ollama** или **LM Studio**,
+  если у тебя есть мощный комп.
+</Callout>
+
+<Steps>
+
+<Step>
+
+### Установи girl-agent
+
+<Tabs items={["Windows (npx)", "Linux / macOS / WSL", "Termux (Android)", "Docker"]}>
+<Tab value="Windows (npx)">
+
+1. Поставь [Node.js 22 LTS](https://nodejs.org/en/download/) — обычный `.msi`-инсталлер,
+   галочка **Add to PATH** при установке.
+2. В PowerShell:
+
+   ```powershell
+   npx @thesashadev/girl-agent
+   ```
+
+Первый запуск скачает пакет (~30 МБ) и откроет визард прямо в окне. WebUI поднимется на
+`http://localhost:3000`.
+
+Хочешь короче — поставь глобально:
+
+```powershell
+npm install -g @thesashadev/girl-agent
+girl-agent
+```
+
+Если нужен системный лоток и автозапуск — есть нативный десктоп-клиент на Rust в
+[Releases](https://github.com/TheSashaDev/girl-agent/releases).
+
+</Tab>
+<Tab value="Linux / macOS / WSL">
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TheSashaDev/girl-agent/master/scripts/install.sh | sh
+```
+
+Скрипт сам скачает Node.js 22 в `~/.local/share/girl-agent/runtime/`, не трогая систему.
+После установки команда `girl-agent` будет доступна.
+
+</Tab>
+<Tab value="Termux (Android)">
+
+```bash
+pkg install nodejs
+curl -fsSL https://raw.githubusercontent.com/TheSashaDev/girl-agent/master/scripts/install.sh | sh
+```
+
+Если приложение убивает процесс при блокировке экрана — выполни `termux-wake-lock`.
+
+</Tab>
+<Tab value="Docker">
+
+```bash
+docker run -it --rm -p 3000:3000 -v girl-agent-data:/data \
+  ghcr.io/thesashadev/girl-agent:latest
+```
+
+Открой `http://localhost:3000` в браузере.
+
+</Tab>
+</Tabs>
+
+</Step>
+
+<Step>
+
+### Получи Telegram-токен
+
+Самый простой вариант — **бот-режим**.
+
+1. Открой в Telegram [@BotFather](https://t.me/BotFather)
+2. Отправь `/newbot`
+3. Придумай имя бота и username
+4. BotFather пришлёт строку вида `1234567890:ABCdefGHIjklmnopQRSTuvwxyz` — это **токен**
+
+<Callout type="warn">
+  Никому не показывай токен. Если случайно засветил — отправь BotFather `/revoke` и получи
+  новый.
+</Callout>
+
+Если хочешь, чтобы это выглядело как настоящий человек — нужен **userbot-режим**. Тогда
+понадобятся `api_id` и `api_hash` с [my.telegram.org](https://my.telegram.org).
+[Подробнее →](/docs/users/telegram-modes)
+
+</Step>
+
+<Step>
+
+### Получи ключ LLM
+
+<Tabs items={["ClaudeHub (РФ, рекомендуем)", "OpenAI", "Ollama (локально)"]}>
+<Tab value="ClaudeHub (РФ, рекомендуем)">
+
+1. Зарегистрируйся на [claudehub.fun](https://claudehub.fun)
+2. Пополни баланс (СБП, крипта)
+3. Создай API-ключ в личном кабинете
+4. Сохрани его — нужно будет вставить в WebUI
+
+Прокси работает в РФ, не требует VPN. Поддерживает Claude и GPT.
+
+</Tab>
+<Tab value="OpenAI">
+
+1. Зарегистрируйся на [platform.openai.com](https://platform.openai.com)
+2. Пополни баланс ($5 минимум)
+3. Создай API-ключ в [API Keys](https://platform.openai.com/api-keys)
+
+В РФ доступ может потребовать VPN.
+
+</Tab>
+<Tab value="Ollama (локально)">
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull llama3.1
+```
+
+Бесплатно, без интернета, но нужна мощная видеокарта (16+ ГБ VRAM для нормального качества).
+В WebUI выбери провайдер **Ollama** — ключ не нужен.
+
+</Tab>
+</Tabs>
+
+</Step>
+
+<Step>
+
+### Запусти и пройди визард
+
+```bash
+girl-agent
+```
+
+Откроется `http://localhost:3000` (если не открылся — открой вручную). Дальше:
+
+1. Выбираешь **Bot mode** или **Userbot mode**
+2. Вставляешь токен / api_id+hash
+3. Выбираешь LLM-провайдер и вставляешь ключ
+4. Указываешь имя, возраст, национальность (RU/UA), часовой пояс
+5. Выбираешь **стадию отношений** (1 — только познакомились, 9 — давно вместе)
+6. Выбираешь **профиль общения** (нормальная, милая, альтушка, болтушка, залипала)
+7. Нажимаешь **Сгенерировать персону** — ИИ напишет персонаж, речь, границы
+
+[Подробный разбор визарда →](/docs/users/setup-wizard)
+
+</Step>
+
+<Step>
+
+### Напиши ей в Telegram
+
+После запуска профиля:
+- В **bot-режиме** — напиши боту, которого создал у @BotFather
+- В **userbot-режиме** — напиши на тот номер, который указал
+
+Первое сообщение лучше короткое и человеческое — без «здравствуйте, представьтесь».
+Просто «привет» или «как сама».
+
+<Callout type="info">
+  Если ответ не пришёл за минуту — это нормально. Она может «читать и не отвечать», быть на
+  занятиях, спать. Проверь лог в WebUI на вкладке **Logs**.
+</Callout>
+
+</Step>
+
+</Steps>
+
+## Что дальше
+
+- Узнать, **что значит каждая опция в визарде** — [Setup Wizard](/docs/users/setup-wizard)
+- Понять **как меняется поведение от стадии** — [Стадии отношений](/docs/users/stages)
+- Узнать **какие команды можно слать в чат** (`:wake`, `:status`, `:debug`) — [Команды](/docs/users/commands)
+- Когда что-то идёт не так — [Troubleshooting](/docs/users/troubleshooting)

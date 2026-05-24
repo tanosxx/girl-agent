@@ -1,0 +1,198 @@
+---
+title: Миграции данных
+description: Система автоматических миграций — структура, реестр, добавление новых
+---
+
+При апдейте `girl-agent` структура `~/.local/share/girl-agent/data` может меняться: новые поля в `config.json`, новые папки в `memory/`, новый формат файла. Чтобы пользователю не пришлось делать вручную — есть **миграции**.
+
+Файлы: `src/migrations/`.
+
+## Принципы
+
+- Каждая миграция — один файл `0NNN-<short-name>.ts` с экспортом `migration0NNN: Migration`.
+- `id` — строго возрастающий (semver-like: `0112`, `0113`, `0114`, ...).
+- Применяется один раз на всю систему, трекается в `~/.local/share/girl-agent/data/.migrations.json`.
+- Идемпотентна: если запустить дважды — второй раз ничего не делает.
+- Не падает на одиночный профиль — ошибка пишется в `result.errors`, остальные профили продолжают.
+
+## Контракт
+
+```ts
+// src/migrations/index.ts
+export interface Migration {
+  id: string;                                 // "0114"
+  description: string;                        // "memory palace structure"
+  needsLLM?: boolean;                          // true, если миграция вызывает LLM
+  needsInput?: MigrationInputField[];          // поля, которых может не хватать в config
+  migrate(ctx: MigrationContext): Promise<ProfileConfig>;
+}
+
+export interface MigrationContext {
+  profilePath: string;                         // абсолютный путь к папке профиля
+  config: ProfileConfig;                        // распарсенный config.json
+  llm?: LLMClient;                              // если needsLLM=true и есть фабрика
+  log: (msg: string) => void;                   // логгер (stderr verbose / noop)
+}
+```
+
+`migrate()` должна:
+
+- читать/писать файлы внутри `profilePath`;
+- возвращать **новый** `ProfileConfig` (даже если не меняли — верните `ctx.config`);
+- бросать в случае фатальной ошибки (не возвращать `null` / `undefined`).
+
+## Жизненный цикл
+
+```
+girl-agent (любой режим)
+        │
+        ▼
+   checkForPendingMigrations()
+        │ есть pending?
+        ├─ нет → запускаем как обычно
+        └─ да  → CLI/WebUI/headless печатает предупреждение
+                 пользователь запускает `girl-agent update`
+                       │
+                       ▼
+                runMigrations({ verbose, llmFactory })
+                       │
+                       ├─ для каждой pending миграции:
+                       │   ├─ для каждого профиля:
+                       │   │   ├─ читаем cfg
+                       │   │   ├─ проверяем needsInput → если чего-то нет, warning
+                       │   │   ├─ создаём llm если needsLLM
+                       │   │   ├─ migrate(ctx) → updatedCfg
+                       │   │   ├─ writeConfig(updatedCfg)
+                       │   │   └─ +1 к profilesAffected
+                       │   └─ помечаем migration.id как applied
+                       │
+                       └─ обновляем lastRunVersion + lastRunAt
+```
+
+## Текущий реестр
+
+- **0112** — `0112-add-use-wss-default.ts` — добавляет `cfg.telegram.useWss = true` (если userbot и поля нет).
+- **0113** — `0113-ensure-communication-md.ts` — генерирует `communication.md`, если его нет, и заполняет `communicationProfile` дефолтами.
+- **0114** — `0114-memory-palace.ts` — создаёт пустую структуру `memory/palace/<wing>/<hall>/...`, если она отсутствует.
+
+Регистр: `ALL_MIGRATIONS` в `src/migrations/index.ts`. Порядок применения == порядок в массиве.
+
+## Добавление новой миграции
+
+1. Создаём файл `src/migrations/0NNN-<short-name>.ts`:
+
+   ```ts
+   import type { Migration } from "./index.js";
+
+   export const migration0115: Migration = {
+     id: "0115",
+     description: "add presenceProfile to all profiles",
+     async migrate({ config, log }) {
+       if (config.presenceProfile) return config;     // идемпотентность
+       log("setting presenceProfile = 'balanced'");
+       return { ...config, presenceProfile: "balanced" };
+     }
+   };
+   ```
+
+2. Добавляем в `ALL_MIGRATIONS`:
+
+   ```ts
+   import { migration0115 } from "./0115-add-presence-profile.js";
+
+   export const ALL_MIGRATIONS: Migration[] = [
+     migration0112,
+     migration0113,
+     migration0114,
+     migration0115,        // ← новая
+   ];
+   ```
+
+3. Пишем e2e-тест (запускаем на чистом профиле, проверяем результат).
+
+4. Бампим версию в `package.json` (или ждём auto-release).
+
+## Если миграция требует LLM
+
+```ts
+export const migration0116: Migration = {
+  id: "0116",
+  description: "regenerate stickers.md via LLM",
+  needsLLM: true,
+  async migrate({ config, llm, log, profilePath }) {
+    if (!llm) {
+      log("LLM not configured, skipping");
+      return config;
+    }
+    const result = await llm.chat([
+      { role: "system", content: "..." },
+      { role: "user", content: "..." }
+    ]);
+    await fs.writeFile(path.join(profilePath, "stickers.md"), result);
+    return config;
+  }
+};
+```
+
+`llmFactory` передаётся снаружи (см. `src/cli.ts` — `update` команда). Если не передан / LLM не получился — `ctx.llm` будет `undefined`, и миграция сама решает, скипать или падать.
+
+## Если миграция требует ввод
+
+```ts
+export const migration0117: Migration = {
+  id: "0117",
+  description: "require ownerId for proactive features",
+  needsInput: [
+    { key: "ownerId", label: "Telegram user id владельца", secret: false }
+  ],
+  async migrate({ config }) {
+    if (!config.ownerId) {
+      // вернёт warning, не упадёт
+      throw new Error("ownerId required");
+    }
+    return config;
+  }
+};
+```
+
+`runMigrations()` перед вызовом `migrate()` сама проверит `needsInput` и добавит warning в результат — но **не** заблокирует запуск. Если миграция падает с `throw` — это уже её решение.
+
+## Откат
+
+Миграций назад **нет**. Если что-то пошло не так — пользователь восстанавливает данные из бэкапа (`~/.local/share/girl-agent/data` целиком).
+
+Хорошая практика — попросить пользователя сделать `cp -r ~/.local/share/girl-agent/data ~/.local/share/girl-agent/data.bak.$(date +%s)` **перед** запуском `girl-agent update`. UI / CLI это явно подсказывает.
+
+## Тестирование
+
+- Юнит-тест на одну миграцию: моки + `migrate(ctx)`.
+- Интеграционный тест: создаёшь temp `DATA_ROOT`, кладёшь туда несколько профилей разных версий, запускаешь `runMigrations()`, читаешь результат.
+- Pre-merge ритуал: на свежем `data.bak/` запустить `girl-agent update --check` и убедиться, что миграции идут чисто. (Подкоманда `--check` пока не написана; пока — `node dist/cli.js update --dry-run`, тоже TBD.)
+
+## `.migrations.json`
+
+Хранит state:
+
+```json
+{
+  "appliedMigrations": ["0112", "0113", "0114"],
+  "lastRunVersion": "0.4.1",
+  "lastRunAt": "2026-05-16T11:35:00.000Z"
+}
+```
+
+Если файла нет — все миграции считаются pending (полезно для нового инстанса).
+
+## Запуск из CLI
+
+```bash
+girl-agent update           # interactive, спросит про опасные шаги
+girl-agent update --yes     # без подтверждений
+```
+
+`update` сам:
+
+1. читает `cfg.llm` первого профиля для `llmFactory`;
+2. вызывает `runMigrations({ verbose: true, llmFactory })`;
+3. печатает summary с количеством применённых миграций и warning-ов;
+4. при наличии warning'ов / errors — exit-код 1.

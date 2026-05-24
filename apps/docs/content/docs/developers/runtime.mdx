@@ -1,0 +1,175 @@
+---
+title: Runtime
+description: Главный класс engine/runtime.ts — что он делает, какие у него таймеры и команды
+---
+
+`Runtime` — это сердце процесса. Один профиль = один инстанс. Поднимается из CLI (`cli.ts`), `server.ts` или `bus.startWithConfig()` в WebUI.
+
+## Контракт
+
+```ts
+import { Runtime } from "./engine/runtime.js";
+
+const rt = new Runtime(cfg);             // конструктор не делает I/O
+await rt.start();                        // подключается к Telegram, запускает таймеры
+rt.on("event", (e: RuntimeEvent) => ...);// подписка на события
+
+await rt.cmdStatus();                    // команды (см. ниже)
+await rt.stop();                         // graceful: закрыть TG, закрыть сессию
+```
+
+Описано в `src/engine/runtime.ts`. Класс extends `EventEmitter`.
+
+## Что делает `start()`
+
+1. Считает `PresenceProfile` из `cfg` (см. [Presence](/docs/developers/presence-daily-life)).
+2. Создаёт `TgAdapter` через `makeTgAdapter(cfg)` (bot или userbot).
+3. Подписывает обработчик входящих: `tg.start(m => this.handleIncoming(m))`.
+4. Снимает self-инфо (`getSelf`) для последующего распознавания упоминаний.
+5. Запускает `agendaTimer` (каждые 60 с — `tickAgenda`).
+6. Запускает `dailyTimer` (каждые 30 мин — `dailyMaintenance`).
+7. Только для userbot — запускает `onlineHeartbeatTimer` (Issue #81): пингует `account.UpdateStatus` каждые ~15–60 с.
+8. Эмитит `info` событие про режим, presence-pattern и communication-профиль.
+
+## Что делает `stop()`
+
+1. Очищает все таймеры (agenda, daily, heartbeat, все pendingReply).
+2. Закрывает текущую сессию: `closeCurrentSession(llm, cfg)` пишет `memory/daily/<date>.md` если в сессии было ≥ N сообщений.
+3. Останавливает TG-адаптер.
+
+`stop()` идемпотентен и устойчив к ошибкам — каждая стадия в `try/catch`. Это важно для WebUI, где пользователь может нажать «остановить» в любой момент.
+
+## Главный конвейер: `handleIncoming(m)`
+
+Псевдокод (полная версия в `runtime.ts`):
+
+```ts
+async handleIncoming(m: IncomingMessage) {
+  if (m.deletion) return this.handleDeletedMessage(m);
+  if (m.emojiReaction) return this.handleEmojiReaction(m);
+
+  await this.ensureOwner(m.fromId);
+  if (!isAllowed(m)) return this.emit("ignored", { reason: "privacy" });
+
+  await this.switchPrimaryAfterDumped(m.fromId);     // если её отшили, новый owner = "ex"
+
+  const key = this.histKey(m.chatId);
+  const hist = await this.historyFor(key, m.fromId, /*restore*/ true);
+  const incoming = this.mediaAwareText(m);
+  hist.push({ role: "user", content: incoming, ts: Date.now() });
+
+  const presence  = computePresenceState(this.presenceProfile, Date.now());
+  const activeDialog = this.isActiveDialog(key);
+  const conflict     = await readConflict(this.cfg.slug);
+
+  const tick = await behaviorTick(this.llm, this.cfg, hist.slice(-8), incoming, {
+    presence, conflict, conflictColdActive: activeConflict(conflict),
+    blockHint: this.dailyLife && currentBlock(this.dailyLife, presence.localHour)?.label,
+    activeDialog,
+    recentIncomingIds: this.recentIncomingIds(key, 10)
+  });
+
+  applyMoodDelta(this.cfg.slug, tick.moodDelta);     // обновляет relationship.md/score
+
+  if (tick.reaction) await this.tg.setReaction(m.chatId, tick.reactionTargetMessageId ?? m.messageId, tick.reaction);
+  if (!tick.shouldReply) return this.emit("ignored", { reason: tick.ignoreReason });
+
+  this.scheduleReply(key, m.chatId, hist, tick, scope, romantic, m, presence.hint, tick.delaySec);
+
+  // smart stage transitions
+  if (shouldRunStageTransitionCheck(this.stageStats, key)) this.checkStageTransition(key, ...);
+}
+```
+
+Ключевые объекты:
+
+| Поле / переменная | Назначение |
+|-------------------|-----------|
+| `histories: Map<chatKey, ConversationTurn[]>` | In-memory история per-chat. Восстанавливается из `log/` при первом сообщении. |
+| `pendingReplyTimers` | Текущие отложенные ответы (`setTimeout`). Новое входящее **отменяет** старый таймер, заменяет на новый. |
+| `pendingReplySeq` | Монотонный seq на чат — защита от race condition, когда несколько входящих кладут друг друга. |
+| `lastDecision` | Снапшот последнего решения для команды `:why`. |
+| `stageStats` | Счётчики для smart stage transitions. |
+| `sentMessages` | Список отправленных, нужен для команды `:amnesia`. |
+| `incomingMsgIds` | Последние входящие message-id — для реакций «на одно из последних 10». |
+
+## Pending-reply конвейер
+
+`scheduleReply()` строит таймер, который:
+
+1. Проверяет seq — если перебит новым входящим, выходит молча.
+2. Берёт **последнее** входящее на момент срабатывания (юзер мог дослать ещё).
+3. Сетит `lastDecision.status = "sending"`.
+4. Вызывает `generateAndSend()`.
+
+`generateAndSend()`:
+
+1. Строит system-prompt через `buildSystemPrompt(cfg, scope, intent, romantic)`. Прокидывает persona, communication, conflict, daily-life, memory.
+2. Вызывает `llm.chat(messages)` с messages = [system, ...converted history].
+3. Парсит инструменты-маркеры в ответе (`parseToolMarkers`) и выполняет, если есть (`executeToolAction`).
+4. Делит ответ на пузыри (`sendBubbles`) с typing-индикатором и `injectTypos` по communication-настройкам.
+5. Каждое отправленное сообщение пишется в session log (`appendSessionLog`).
+
+## Таймеры
+
+| Таймер | Период | Что делает |
+|--------|--------|------------|
+| `agendaTimer` | 60 с | `tickAgenda()`: ищет due items, шлёт проактивные пинги. |
+| `dailyTimer` | 30 мин | `dailyMaintenance()`: обновить daily-life если день сменился; `closeStaleSessions()`. |
+| `onlineHeartbeatTimer` | 15–60 с (только userbot) | Решает, выставить ли «онлайн» через `account.UpdateStatus`. |
+| `pendingReplyTimers[chat]` | разовый | Отложенный ответ на одно входящее. |
+
+Все таймеры — `unref()`-нутые, чтобы Node не держал процесс из-за них.
+
+## Команды
+
+`Runtime` экспортирует методы-команды, которые вызывают и WebUI, и headless, и (в будущем) интерактивный CLI:
+
+```ts
+rt.cmdStatus()      // { stage, score, mood, online, ... }
+rt.cmdModel(args)   // переключить модель / preset
+rt.cmdReset(stage)  // сбросить score, опционально новая стадия
+rt.cmdSetStage(s)   // прыгнуть в стадию
+rt.cmdWake()        // принудительно «разбудить» (на 15 минут не спит)
+rt.cmdBlock(chat)   // userbot: block
+rt.cmdUnblock(chat)
+rt.cmdRead(chat)    // userbot: read history
+rt.cmdReportSpam()
+rt.cmdDeleteLast()
+rt.cmdSticker(emoji)
+rt.cmdDebug()       // dump runtime state
+rt.cmdWhy(chat)     // объяснить последнее решение (lastDecision)
+rt.cmdAmnesia(n)    // удалить N последних отправленных + забыть из истории
+```
+
+Каждая команда возвращает строку или объект — никаких глобальных side-effects. Подписка на новые события — через `rt.on("event", ...)`.
+
+## События
+
+```ts
+interface RuntimeEvent {
+  type: "incoming" | "outgoing" | "ignored" | "score" | "info" | "error";
+  text?: string;
+  chatId?: number | string;
+  reason?: string;
+  score?: any;
+}
+```
+
+Что эмитится:
+
+- `incoming` — пришло сообщение, после фильтров.
+- `outgoing` — отправили (один на пузырь).
+- `ignored` — решили проигнорить (с `reason`).
+- `score` — изменился score (после `applyMoodDelta`).
+- `info` — служебная инфа (запуск, смена режима, обновление persona).
+- `error` — пойманное исключение в фоне.
+
+В WebUI они проксируются в `bus` (`webui/runtime-bus.ts`) и оттуда уходят в `/ws/logs/<slug>` и в backlog для UI.
+
+## Безопасные приёмы
+
+1. **Никогда не зовите `process.exit()` из Runtime.** Это убьёт WebUI и другие профили в том же процессе.
+2. **Все `await` — в `try/catch`,** если они в callback (timer, event). Иначе unhandled rejection валит Node.
+3. **Не держите `this`-замыкания в long-running таймерах** на `cfg`, который может быть пересохранён UI — читайте свежий `cfg` через `readConfig()` если важно.
+4. **Не модифицируйте `cfg` напрямую** без `writeConfig(cfg)` сразу — рассинхрон с диском мутит UI.

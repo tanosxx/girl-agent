@@ -1,0 +1,142 @@
+---
+title: Agenda engine
+description: Очередь проактивных пингов — extract, due, fire, follow-up
+---
+
+Agenda — это очередь обещаний и идей, которые она «помнит» и пингует первой. Файл состояния — `agenda.json` в папке профиля. Логика — `src/engine/agenda.ts`.
+
+## Структура
+
+```ts
+interface AgendaItem {
+  id: string;                  // uuid
+  type: "promise" | "idea" | "callback" | "checkin";
+  text: string;                // что писать
+  reason: string;              // почему помнит
+  dueAt: string;               // ISO timestamp
+  createdAt: string;
+  firedAt?: string;            // когда отправили
+  attempts: number;            // если он не ответил после firedAt
+  resolved?: boolean;
+}
+
+interface AgendaState {
+  items: AgendaItem[];
+  lastFiredAt?: string;        // глобальный rate-limit
+}
+```
+
+## Lifecycle
+
+```
+            extract                  due                  fire
+log сессии  ─────────►  agenda.json  ────►  Runtime  ─────────►  send to chat
+                                              │
+                                              ▼
+                                       follow-up logic
+                                       (он ответил? → decide;
+                                        он молчит → attempts++ / drop)
+```
+
+### 1. Extract
+
+После каждой завершённой сессии (или вручную, `extractAgendaFromLog`), LLM смотрит на лог дня и выдёргивает обещания / идеи / запросы:
+
+```ts
+await extractAgendaFromSession(llm, cfg.slug, sessionLog);
+```
+
+Промпт инструктирует LLM:
+- что считать обещанием («скину фотку», «вечером расскажу», «напомню тебе»),
+- что — идеей / напоминанием («давай в субботу в кино»),
+- что — checkin'ом («как ты там после собеса?»).
+
+`dueAt` ставится с реалистичной отсрочкой (часы — десятки часов), не «через 30 секунд».
+
+### 2. Due
+
+`Runtime.tickAgenda()` запускается каждые 60 секунд:
+
+```ts
+const due = await dueAgendaItems(slug, now);
+if (!due.length) return;
+const item = pickOneRespectingRateLimit(due);
+if (!item) return;
+await fireAgendaItem(item);
+```
+
+Rate-limit: между двумя проактивными сообщениями — минимум 45 минут. Это защита от «спама», особенно когда после миграции/обновления накопилось 5–10 due-items.
+
+### 3. Fire
+
+`fireAgendaItem(item)`:
+
+1. Строит system-prompt с дополнительным контекстом `# AGENDA\n${item.reason}\n${item.text}`.
+2. Вызывает `llm.chat(...)` — LLM формулирует фактический пузырь (или серию пузырей).
+3. Отправляет через `tg.sendText` с `injectTypos`.
+4. Помечает item.firedAt = now, `attempts = 0`.
+5. Пишет в session log `[proactive] …`.
+
+### 4. Follow-up
+
+Если он отвечает в течение N часов — `decideAfterProactiveResponse(item, response)`:
+
+- если ответ положительный / диалог продолжается → `resolved = true`.
+- если ответ негативный («не сейчас») → перенос dueAt на завтра, `attempts++`.
+- если он игнорит больше суток → `attempts++`. Когда `attempts >= 3` — item дропается (`resolved = true` с `reason: "abandoned"`).
+
+## API
+
+```ts
+// чтение / запись
+readAgenda(slug: string): Promise<AgendaState>
+writeAgenda(slug: string, state: AgendaState): Promise<void>
+
+// расчёт
+dueAgendaItems(slug: string, now?: Date): Promise<AgendaItem[]>
+
+// добавление (вручную / из LLM)
+appendAgendaItems(slug: string, items: AgendaItem[]): Promise<void>
+
+// после отправки
+markAgendaFired(slug: string, id: string): Promise<void>
+
+// после ответа
+resolveAgendaItem(slug: string, id: string, reason: string): Promise<void>
+
+// extraction
+extractAgendaFromSession(llm, slug, sessionMd): Promise<AgendaItem[]>
+```
+
+## Где это видно в UI
+
+- В Web UI на странице профиля есть вкладка «Agenda» — показывает текущий `agenda.json` (items + dueAt + resolved).
+- В `/api/profiles/:slug/agenda` (GET) — JSON-снимок.
+- В headless-протоколе — событие `agenda` при fire'е.
+
+## Тесты вручную
+
+Чтобы быстро «зажечь» агенду:
+
+```bash
+node -e '
+const { appendAgendaItems } = require("./dist/engine/agenda.js");
+appendAgendaItems("alice", [{
+  id: crypto.randomUUID(),
+  type: "promise",
+  text: "обещала скинуть фотку",
+  reason: "вчера договорились",
+  dueAt: new Date(Date.now() + 60_000).toISOString(),
+  createdAt: new Date().toISOString(),
+  attempts: 0
+}]);
+'
+```
+
+Через 60–120 секунд после `tickAgenda` запустится fire.
+
+## Конвенции для нового кода
+
+- **Никогда не пиши `dueAt` в прошлом.** Делай минимум +5 минут.
+- **Не перезаписывай `agenda.json` целиком** без чтения — другой код параллельно мог дописать item.
+- **Не добавляй больше 3 item'ов в день** — это сжигает токены и спамит. LLM-промпт уже включает это ограничение.

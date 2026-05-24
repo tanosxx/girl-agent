@@ -1,0 +1,106 @@
+---
+title: Getting started
+description: Клонируем репозиторий, ставим зависимости, поднимаем dev-цикл
+---
+
+## Требования
+
+- Node.js **≥18.18** (рекомендуем 20 или 22).
+- npm (поставится вместе с Node).
+- Git.
+
+## Клон и установка
+
+```bash
+git clone https://github.com/TheSashaDev/girl-agent.git
+cd girl-agent
+npm install
+```
+
+WebUI — отдельный пакет в `webui/`. Когда ты запускаешь сборку через `npm run build`, она ставит зависимости и собирает Vite-бандл автоматически. Если хочешь поработать только с фронтом — можно из `webui/`:
+
+```bash
+cd webui
+npm install
+npm run dev
+```
+
+## Скрипты в `package.json`
+
+```json
+"scripts": {
+  "build": "npm run build:server && npm run build:webui",
+  "build:server": "tsup",
+  "build:webui": "cd webui && npm install --silent --no-audit --no-fund && npm run build",
+  "build:termux": "...",
+  "dev": "tsx src/cli.ts",
+  "dev:webui": "cd webui && npm run dev",
+  "start": "node dist/cli.js",
+  "typecheck": "tsc --noEmit"
+}
+```
+
+- `npm run dev` — запустить CLI через `tsx` без сборки. По умолчанию поднимет WebUI на http://localhost:3000.
+- `npm run dev:webui` — Vite-dev фронта; смотрит на бекенд по адресу `VITE_API_URL` (`.env.local` в `webui/`).
+- `npm run build` — продакшен-сборка (`dist/` + `webui/dist/`).
+- `npm run typecheck` — `tsc --noEmit` по всему `src/`.
+
+## Откуда читать данные
+
+CLI/runtime хранит данные в директории `DATA_ROOT`:
+
+- по умолчанию: `~/.local/share/girl-agent/data` (Linux/macOS), `%APPDATA%\girl-agent\data` (Windows), `~/Library/Application Support/girl-agent/data` (macOS — не используется, см. ниже).
+- переопределяется через переменную `GIRL_AGENT_DATA`.
+
+В dev'е удобно делать так:
+
+```bash
+GIRL_AGENT_DATA=$PWD/.dev-data npm run dev
+```
+
+— тогда профили лежат рядом с репо и легко стереть.
+
+## Быстрая проверка
+
+```bash
+GIRL_AGENT_DATA=$PWD/.dev-data npx tsx src/cli.ts --list
+# (нет профилей)
+# data: /path/to/repo/.dev-data
+```
+
+## Структура исходников
+
+См. [Repo layout](/docs/developers/repo-layout) — карта папок и за что отвечает каждая.
+
+## Подключение к LLM в dev
+
+В WebUI есть форма «Test LLM» (`POST /api/profiles/:slug/test-llm`). Можно также вызвать `chat()` из ноды:
+
+```ts
+import { makeLLM } from "./src/llm/index.js";
+
+const llm = makeLLM({
+  presetId: "claudehub",
+  proto: "anthropic",
+  baseURL: "https://api.claudehub.fun",
+  apiKey: process.env.GIRL_AGENT_API_KEY!,
+  model: "claude-sonnet-4.6"
+});
+
+const reply = await llm.chat([
+  { role: "system", content: "be concise" },
+  { role: "user", content: "say hi" }
+]);
+console.log(reply);
+```
+
+## Линт / типы / тесты
+
+В проекте нет своего ESLint-конфига и тестов в репозитории. Минимум для PR:
+
+```bash
+npm run typecheck
+npm run build
+```
+
+CI запускает то же. Если что-то добавляешь — смотри [Contributing](/docs/developers/contributing).

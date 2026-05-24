@@ -1,0 +1,154 @@
+---
+title: Presence и daily-life
+description: Когда она онлайн, когда спит, что «делает» в моменте
+---
+
+Два независимых движка. Behavior layer читает результаты обоих в `BehaviorContext`.
+
+## Presence
+
+Файл: `src/engine/presence.ts`. Идея — заранее (один раз при `start()`) посчитать «когда она бывает онлайн», а на каждый вызов получать снимок состояния.
+
+```ts
+export interface PresenceProfile {
+  pattern: "early-bird" | "balanced" | "night-owl";
+  onlineWindows: Array<{ from: number; to: number }>;  // часы 0..24
+  sleepFrom: number;
+  sleepTo: number;
+  nightWakeChance: number;
+  weekendShift?: number;
+}
+
+export interface PresenceState {
+  online: boolean;
+  asleep: boolean;
+  nightAwake: boolean;
+  localHour: number;
+  hint: string;           // короткая фраза в промпт ("на паре", "только проснулась")
+  nextCheckSec: number;   // когда снова пересчитать
+}
+```
+
+### computePresenceProfile(cfg) → PresenceProfile
+
+Считает паттерн на основе `cfg.sleepFrom/sleepTo`, communication-стиля и nationality. Запоминается на время жизни `Runtime`.
+
+### computePresenceState(profile, nowMs) → PresenceState
+
+Снимок. Учитывает:
+
+- локальное время в `cfg.tz`,
+- попадание в onlineWindow,
+- зону сна,
+- редкое ночное пробуждение (вероятность `nightWakeChance` за интервал).
+
+`hint` — строка для промпта. Behavior layer пересылает её в LLM в составе промпта. Это даёт «онлайн / СПИТ / ночное пробуждение (заспанная, коротко)».
+
+### onlineHeartbeat (только userbot)
+
+Файл `src/engine/online-tick.ts`. Логика:
+
+1. Если только что отправили реальное сообщение — Telegram сам делает онлайн, ничего не пингуем.
+2. Если presence говорит «онлайн» сейчас → шанс выставить онлайн через `account.UpdateStatus`.
+3. Если presence говорит «офлайн/спит» → ничего.
+4. Раз в 15–60 секунд `Runtime.onlineHeartbeatTick()` решает заново.
+
+В bot-режиме всё отключено: у ботов нет last seen.
+
+## Daily-life
+
+Файл: `src/engine/daily-life.ts`. Это **внутри-дневное** расписание, генерируется один раз в сутки.
+
+```ts
+export interface DailyLife {
+  date: string;            // YYYY-MM-DD в её tz
+  blocks: DailyBlock[];
+}
+
+export interface DailyBlock {
+  fromHour: number;   // 0..24
+  toHour: number;
+  label: string;      // "учёба", "пара по матану", "тренировка"
+  busy: "free" | "low" | "high";
+  online: "yes" | "maybe" | "no";
+}
+```
+
+### loadOrGenerateDailyLife(llm, cfg) → DailyLife
+
+1. Если файл `daily-life/<YYYY-MM-DD>.md` уже есть — парсим его.
+2. Если нет — генерируем через LLM по `persona.md` и `cfg.busySchedule`.
+3. Кешируем в памяти `Runtime` (`this.dailyLife`).
+
+В `runtime.ts` есть `refreshDailyLife()` (фон) и `dailyMaintenance()` (каждые 30 мин — пересоздать если день сменился в её tz).
+
+### currentBlock(life, localHour) → DailyBlock | undefined
+
+Возвращает текущий блок. Behavior layer пересылает `block.label` в LLM как `blockHint`:
+
+```
+Что сейчас делает: пара по матану
+```
+
+Если `busy: "high"` — LLM, скорее всего, увеличит `delaySec` и сделает `intent: "short"` или `"ignore"`.
+
+## Sleep-логика
+
+Behavior layer:
+
+```ts
+if (ctx.presence?.asleep && !ctx.presence.nightAwake && Math.random() < 0.85 * sleepIgnoreMul) {
+  return { shouldReply: false, intent: "left-on-read", ignoreReason: "asleep", ... };
+}
+if (ctx.presence?.nightAwake) {
+  // 15% — снова уснула;
+  // иначе — короткий, заспанный ответ через 10..120 с
+}
+```
+
+`sleepIgnoreMul` зависит от `communication.notifications`:
+
+| notifications | mul |
+|---------------|-----|
+| priority      | 0.8 |
+| normal        | 0.9 |
+| muted         | 1.0 |
+
+То есть «приоритетные уведомления» немного снижают шанс игнорить во сне.
+
+## activeDialog
+
+`Runtime.handleIncoming` вычисляет:
+
+```ts
+const lastHer = this.lastHerReplyTs.get(key);
+const lastUser = this.lastUserMsgTs.get(key);
+const activeDialog = lastHer && lastUser && now - lastHer < 5 * 60_000 && now - lastUser < 60_000;
+```
+
+Если оба сообщения недавно — диалог активен. В behavior layer это даёт быстрый non-LLM путь и шанс «не уходить молча».
+
+## Команда `:wake`
+
+`Runtime.cmdWake()`:
+
+```ts
+this.forcedWakeChatId = String(currentChatId);
+this.forcedWakeUntil = Date.now() + 15 * 60_000;
+```
+
+Behavior layer проверит `forcedWakeUntil` и в этом окне не будет считать её asleep.
+
+## Команда `:debug`
+
+Возвращает snap:
+
+```
+presence: online=true, asleep=false, hour=14
+daily-life: 2026-05-16, blocks=8, current=пара по матану (high busy)
+communication: balanced, initiative=medium, life=medium
+score: {interest:50, trust:35, attraction:45, ...}
+stage: convinced
+```
+
+Используется в WebUI на странице профиля и в `:debug` команде headless-режима.

@@ -1,0 +1,185 @@
+---
+title: Server mode
+description: Non-TTY automation — JSON-конфиг, env vars, systemd / docker artifacts
+---
+
+Подкоманда: `girl-agent server`. Файл: `src/server.ts`.
+
+Идея: один бинарь, без браузера, без интерактивных промптов. Подходит для CI, Docker, systemd, k8s — куда угодно, где нет TTY.
+
+## Help / шпаргалка
+
+```
+girl-agent server --print-config > bot.json
+# отредактируй bot.json
+girl-agent server --config bot.json --headless
+
+girl-agent server --list
+girl-agent server --profile=<slug> --headless
+girl-agent server --profile=<slug> --set-model --api-preset=<id> --model=<m> [--api-key=<key>]
+girl-agent server --profile=<slug> --delete-profile --yes
+
+girl-agent server --print-systemd > /etc/systemd/system/girl-agent.service
+girl-agent server --print-docker
+```
+
+## Конфиг из JSON
+
+`--print-config` выводит шаблон. Пример (укорочён):
+
+```json
+{
+  "name": "alice",
+  "age": 19,
+  "nationality": "RU",
+  "tz": "Europe/Moscow",
+  "mode": "bot",
+  "stage": "tg-given-cold",
+  "llm": {
+    "presetId": "claudehub",
+    "proto": "anthropic",
+    "apiKey": "sk-...",
+    "model": "claude-sonnet-4.6"
+  },
+  "telegram": { "botToken": "123:abc..." },
+  "ownerId": "@yourusername",
+  "privacy": "owner-only",
+  "sleepFrom": 23,
+  "sleepTo": 8,
+  "ignoreTendency": 35
+}
+```
+
+`validateConfig(raw)` проверяет обязательные поля и кидает ошибку с понятным списком:
+
+```
+[server] конфиг невалиден, недостающие поля:
+  - llm.presetId
+  - llm.model
+[server] см. шаблон: girl-agent server --print-config
+```
+
+После успешной валидации:
+
+1. `writeConfig(cfg)` — конфиг сохраняется в `DATA_ROOT/<slug>/config.json`.
+2. Если в `cfg.llm.apiKey` есть ключ (или провайдер не требует ключа) — генерируется persona-pack (`persona.md`, `speech.md`, `communication.md`, `stickers.md`).
+3. Запускается `Runtime` (если не передан `--no-start`).
+
+## Конфиг из env vars
+
+Если ни `--config`, ни `--profile` не передано — `configFromEnv()` смотрит на:
+
+| Env var | Что |
+|---------|-----|
+| `GIRL_AGENT_DATA` | путь к профилям (default зависит от платформы) |
+| `GIRL_AGENT_MODE` | `bot` или `userbot` |
+| `GIRL_AGENT_TOKEN` | telegram bot token |
+| `GIRL_AGENT_API_PRESET` | `claudehub`, `openai`, `anthropic`, ... |
+| `GIRL_AGENT_API_KEY` | ключ от LLM-провайдера |
+| `GIRL_AGENT_MODEL` | модель (опционально, default = `preset.defaultModel`) |
+| `GIRL_AGENT_NAME` | имя (если не задано — рандомное) |
+| `GIRL_AGENT_AGE` | возраст (default 18) |
+| `GIRL_AGENT_NATIONALITY` | `RU` или `UA` |
+| `GIRL_AGENT_TZ` | IANA tz или короткий код (`MSK`, `EEST`) |
+| `GIRL_AGENT_STAGE` | id стадии (`tg-given-warming`) или номер (`3`) |
+| `GIRL_AGENT_COMM_PRESET` | id communication preset'а |
+| `GIRL_AGENT_IGNORE_TENDENCY` | 0..100 |
+| `GIRL_AGENT_OWNER_ID` | id юзера или `@username` |
+| `GIRL_AGENT_TG_API_ID` | для userbot |
+| `GIRL_AGENT_TG_API_HASH` | для userbot |
+| `GIRL_AGENT_TG_PHONE` | для userbot |
+| `GIRL_AGENT_TG_PROXY` | tg://proxy URL или socks5://user:pass@host:port |
+| `GIRL_AGENT_SLEEP_FROM` / `_TO` | часы (`23` / `8`) |
+| `GIRL_AGENT_NIGHT_WAKE` | вероятность ночного пробуждения (0..1) |
+
+Это путь для CI и docker-compose `environment:`:
+
+```yaml
+services:
+  girl-agent:
+    image: ghcr.io/thesashadev/girl-agent:latest
+    environment:
+      GIRL_AGENT_MODE: bot
+      GIRL_AGENT_TOKEN: "${BOT_TOKEN}"
+      GIRL_AGENT_API_PRESET: claudehub
+      GIRL_AGENT_API_KEY: "${CLAUDEHUB_KEY}"
+      GIRL_AGENT_NAME: alice
+      GIRL_AGENT_OWNER_ID: "@yourusername"
+    volumes:
+      - ./data:/data
+    command: ["server", "--headless"]
+```
+
+## --print-systemd
+
+```bash
+girl-agent server --print-systemd > /etc/systemd/system/girl-agent.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now girl-agent
+```
+
+Содержимое (см. `buildSystemdUnit` в `server.ts`):
+
+```ini
+[Unit]
+Description=girl-agent
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/girl-agent/env
+WorkingDirectory=/var/lib/girl-agent
+ExecStart=/usr/bin/env npx --yes @thesashadev/girl-agent server --headless
+Restart=on-failure
+User=girl-agent
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/girl-agent/env` — туда положите ваши `GIRL_AGENT_*` env vars.
+
+## --print-docker
+
+Выводит:
+
+- `Dockerfile`,
+- `docker-compose.yml`,
+- `docker run` cheatsheet.
+
+См. `buildDockerArtifacts` в `server.ts`. Образ строится из `node:20-slim` + `npm install -g @thesashadev/girl-agent`.
+
+## --set-model / --delete-profile
+
+Утилиты редактирования без запуска Runtime:
+
+```bash
+girl-agent server --profile=alice --set-model --api-preset=openai --model=gpt-4o --api-key=sk-...
+girl-agent server --profile=alice --delete-profile --yes
+```
+
+Удобно в скриптах: после `--set-model` бот после перезапуска подхватит новую модель.
+
+## Поведение при отсутствии параметров
+
+Если в server-режиме передан только `server` без `--config`, `--profile`, env vars и утилит — печатает help и выходит с кодом 1. Это намеренно: server-mode не интерактивен.
+
+## stdout / stderr
+
+- `stderr`: служебные сообщения (`[server] профиль сохранён: ...`, `[server] бот запущен: ...`).
+- `stdout`:
+  - без `--headless` — события Runtime в текстовом формате (`<timestamp> <type> <json>`).
+  - с `--headless` или `--json-events` — NDJSON по протоколу из [Headless protocol](/docs/developers/headless-protocol).
+
+## Миграции
+
+Перед стартом Runtime автоматически проверяются pending-миграции:
+
+```ts
+if (await checkForPendingMigrations()) {
+  process.stderr.write("[updater] обнаружены pending-миграции, запуск...\n");
+  await runMigrations({ verbose: true, llmFactory: (c) => makeLLM(c.llm) });
+}
+```
+
+Это безопасно: миграция атомарна, и если она требует LLM, а ключа нет, мы пишем warning и пропускаем шаг.

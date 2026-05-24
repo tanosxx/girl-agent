@@ -1,0 +1,143 @@
+---
+title: LLM abstraction
+description: LLMClient, makeLLM, ChatMessage, ретраи, vision
+---
+
+Файл: `src/llm/index.ts`. Главный экспорт — `makeLLM(cfg.llm)`.
+
+## Контракт
+
+```ts
+export interface LLMClient {
+  chat(messages: ChatMessage[], opts?: ChatOpts): Promise<string>;
+}
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string | ChatPart[];
+}
+
+export type ChatPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };  // base64 data URL или https://...
+
+export interface ChatOpts {
+  temperature?: number;
+  maxTokens?: number;
+  responseFormat?: "json_object" | "text";  // fallback'ы есть, см. ниже
+  signal?: AbortSignal;
+}
+```
+
+`chat()` всегда возвращает **строку**. Это упрощает потребителей (behavior, generate, persona-gen) — никакой работы с `choices[0].message`.
+
+## makeLLM(cfg)
+
+```ts
+const llm = makeLLM({
+  presetId: "claudehub",
+  proto: "anthropic",
+  baseURL: "https://api.claudehub.fun",
+  apiKey: process.env.GIRL_AGENT_API_KEY!,
+  model: "claude-sonnet-4.6"
+});
+```
+
+Под капотом — выбор клиента по `proto`:
+
+- `openai` → `OpenAILike(cfg)` (использует `openai` SDK).
+- `anthropic` → `AnthropicLike(cfg)` (использует `@anthropic-ai/sdk`).
+
+Возвращаемый клиент дополнительно оборачивается в `SerializedLLMClient` — простую mutex-обвязку:
+
+```ts
+class SerializedLLMClient implements LLMClient {
+  private chain = Promise.resolve();
+  chat(messages, opts) {
+    const run = () => this.inner.chat(messages, opts);
+    const next = this.chain.then(run, run);   // даже если предыдущий упал — пускаем следующий
+    this.chain = next.catch(() => undefined);
+    return next;
+  }
+}
+```
+
+Это глобально (на инстанс) сериализует LLM-вызовы внутри одного `Runtime`. Зачем:
+
+1. Anthropic agressivно отдаёт 429 на параллельные запросы от одного ключа.
+2. OpenAI компатибл-сервера часто капают конкурентность.
+3. У нас в `Runtime` одновременно могут жать LLM behavior tick, generate, agenda tick, persona-gen — без mutex'а это лотерея.
+
+Минусы: если behavior tick зависнет на 30 с, отложится generate. На практике мы стоим лимит `maxTokens` и таймауты в SDK, так что эффект минимальный.
+
+## OpenAI-compatible
+
+`OpenAILike` использует `openai` SDK с заданным `baseURL`. Особенности:
+
+- **Token field fallback.** Сначала пробует `max_completion_tokens` (новый стандарт), при ошибке `400` про неподдерживаемое поле — повторяет с `max_tokens`. Кеширует, что именно работает для данного `baseURL`.
+- **response_format fallback.** Если попросили `json_object` и сервер возвращает 400 «not supported» — повторяет без `response_format` (JSON-разметка в промпте уже достаточна).
+- **Vision.** Сообщения с `ChatPart[]` отправляются как `content: [{type:"text", ...}, {type:"image_url", ...}]`. Если модель не vision — поток в сервере отвалится 400; вызывающий ловит ошибку через `try/catch` и при необходимости запасает `describeIncomingMedia` (см. `engine/media.ts`).
+
+## Anthropic-compatible
+
+`AnthropicLike` использует `@anthropic-ai/sdk` (`messages.create`). Особенности:
+
+- **System prompt отделён.** Anthropic API хочет system как top-level поле, не в массиве messages. Клиент собирает все `role: "system"` сообщения и склеивает их через `\n\n`.
+- **Чередование ролей.** Anthropic требует, чтобы `user` и `assistant` чередовались. Если у нас два user подряд (после behavior tick'а в активном диалоге), клиент **склеивает** их в одно user-сообщение.
+- **Vision.** Сообщения с `image_url` (data URL) трансформируются в `{ type: "image", source: { type: "base64", ... } }`. Это требует чтобы URL начинался с `data:image/`.
+- **Stop reasons.** Если ответ `stop_reason: "max_tokens"` — клиент возвращает текст как есть, без ретрая (наша логика реалистичной длины и так короткая).
+
+## OAuth refresh
+
+Для GirlAI gateway (`presetId: "girlai"`) поддерживается OAuth. Если `cfg.llm.oauth.expiresAt < now()`:
+
+1. Делается `POST /oauth/token` с `refresh_token`.
+2. Новый access token сохраняется в `cfg.llm.apiKey` и `oauth.expiresAt`.
+3. `writeConfig(cfg)` персистит изменения.
+
+Если рефреш fail — кидаем ошибку с понятным сообщением, runtime ловит и эмитит `error` событие.
+
+## Ошибки
+
+```ts
+export class LLMConnectionError extends Error {}
+export class LLMAuthError extends Error {}
+export class LLMRateLimitError extends Error {}
+export class LLMBadRequestError extends Error {}
+```
+
+Маппинг:
+
+| HTTP | Ошибка |
+|------|--------|
+| 401 / 403 | `LLMAuthError` |
+| 429 | `LLMRateLimitError` |
+| 400 | `LLMBadRequestError` |
+| network / timeout | `LLMConnectionError` |
+
+В behavior tick любые ошибки — fallback на детерминированный путь. В generate — пишется ошибка в session log как `[error]`, WebUI получает событие.
+
+## Тестовый chat
+
+В WebUI есть `POST /api/profiles/:slug/test-llm`:
+
+```ts
+const llm = makeLLM(cfg.llm);
+const reply = await llm.chat([
+  { role: "system", content: "Ответь одним коротким словом 'ok'." },
+  { role: "user", content: "ping" }
+], { temperature: 0, maxTokens: 16 });
+```
+
+Это удобно прокинуть при подключении нового провайдера: ответ `ok` → всё ок, иначе вернётся `{ ok: false, error: ... }`.
+
+## Свой провайдер
+
+Если хочется добавить свой адаптер (не OpenAI и не Anthropic):
+
+1. Добавить вариант в `LLMProto` в `src/types.ts`.
+2. Создать класс, реализующий `LLMClient`.
+3. Добавить ветку в `makeLLM`.
+4. (опционально) Добавить preset в `src/presets/llm.ts` с `proto: "yours"`.
+
+Обычно проще написать OpenAI-compat прокси перед своим API и пользоваться `proto: "openai"`. См. как, например, сделан `lm-studio` пресет.

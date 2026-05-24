@@ -1,0 +1,167 @@
+---
+title: Релизы и версионирование
+description: Auto-release, npm, GHCR — как работает процесс выпуска
+---
+
+`girl-agent` использует **полностью автоматический релиз-процесс** — раз в час GitHub Action проверяет, есть ли новые коммиты, и если есть — bump'ит версию, генерирует changelog и публикует во все каналы.
+
+## Версионирование
+
+[SemVer](https://semver.org). Текущая major-версия — `0.x` (pre-1.0, breaking changes допустимы между minor'ами, но мы стараемся их избегать).
+
+- **Patch** (`0.4.0` → `0.4.1`) — auto-release. Любой коммит в master = новый patch.
+- **Minor** (`0.4.x` → `0.5.0`) — вручную через `npm version minor` + git tag. Делается при крупных фичах или breaking changes в API.
+- **Major** (`0.x.y` → `1.0.0`) — пока не запланирован. Будет, когда:
+  - стабилизируется headless-protocol;
+  - стабилизируется REST API;
+  - закроется большая часть TODO в Runtime.
+
+## Auto-release pipeline
+
+Файл: `.github/workflows/auto-release.yml`. Cron: `0 * * * *` (каждый час).
+
+```
+GitHub Actions: hourly cron
+        │
+        ▼
+checkout (fetch-depth: 0)
+        │
+        ▼
+есть новые коммиты с последнего тега?
+        │
+        ├─ нет → exit
+        │
+        └─ да →
+              │
+              ├─ npm version patch --no-git-tag-version  # bump в package.json
+              │
+              ├─ generate_changelog_via_github_models()  # LLM-генерация changelog
+              │       └─ fallback: cleaned commits
+              │
+              ├─ обновить CHANGELOG.md (новая секция сверху)
+              │
+              ├─ git commit -m "chore(release): vX.Y.Z"
+              │   git tag vX.Y.Z
+              │   git push origin master --tags
+              │
+              ├─ gh workflow run "Publish docker image"
+              │
+              └─ gh workflow run "Publish to npm"
+```
+
+После пуша тега `vX.Y.Z`:
+
+- **`docker-publish.yml`** билдит мульти-арч (amd64+arm64) образ через QEMU+Buildx и пушит в `ghcr.io/thesashadev/girl-agent:vX.Y.Z, latest, X.Y, X.Y.Z`.
+- **`npm-publish.yml`** проверяет, что тег == package.json version, выполняет `npm ci && npm run typecheck && npm run build && npm publish`.
+
+Для пакета нужен secret `NPM_TOKEN` в репозитории.
+
+## Changelog
+
+Генерируется автоматически из коммитов. LLM (GitHub Models API, gpt-5-mini с fallback на gpt-4.1-mini) превращает «сырые» git-сообщения в:
+
+```markdown
+## 0.4.2
+
+Дата: 2026-05-17
+
+🚀 Новое
+- добавлен пресет Cerebras в список LLM
+- WebUI теперь показывает счётчик cringe в дашборде
+
+🐛 Исправления
+- runtime больше не падает на пустых медиа-сообщениях
+- поправлен race condition при перезапуске профиля
+
+📝 Документация
+- описаны headless-протокол и WebSocket контракт
+```
+
+Категории — `🚀 Новое / 🐛 Исправления / 🔧 Улучшения / 📝 Документация`. LLM пропускает только те, в которых реально есть пункты.
+
+**Fallback**, если API недоступен:
+
+```bash
+grep -v -E '^- (Merge pull request|Merge branch|chore\(release\))' /tmp/commits.txt \
+  | sed -E 's/^- (feat|fix|chore|docs|refactor|perf|style|test|ci)(\([^)]+\))?: /- /'
+```
+
+Простой regex-чистильщик без LLM.
+
+## Распространение
+
+После релиза версия доступна:
+
+1. **npm**: `npm i -g @thesashadev/girl-agent@latest`
+2. **Docker / GHCR**: `docker pull ghcr.io/thesashadev/girl-agent:latest`
+3. **Install script**: `curl -fsSL https://raw.githubusercontent.com/TheSashaDev/girl-agent/main/scripts/install.sh | sh` — внутри делает `npm i -g`.
+4. **GitHub Releases**: страница тега `vX.Y.Z` с changelog (создаётся не auto-release'ом, но видна на странице тегов; полноценный Release с assets — TBD).
+
+## Ручной релиз (если auto сломался)
+
+```bash
+# 1. убедись, что на master и pull latest
+git checkout master
+git pull --rebase
+
+# 2. бамп версии
+npm version patch --no-git-tag-version
+# или: npm version minor --no-git-tag-version
+
+# 3. обнови CHANGELOG.md вручную (вставь новую секцию сверху)
+$EDITOR CHANGELOG.md
+
+# 4. коммит + тег
+NEW=$(node -p "require('./package.json').version")
+git add package.json package-lock.json CHANGELOG.md
+git commit -m "chore(release): v${NEW}"
+git tag "v${NEW}"
+git push origin master --tags
+
+# 5. workflow'ы docker-publish и npm-publish запустятся автоматически
+```
+
+## Минимальные проверки перед мерджем
+
+CI **не блокирует** мердж в master. Это намеренно — auto-release сам делает `npm ci && typecheck && build` уже на этапе npm publish, и если что-то сломалось — публикация не пройдёт.
+
+Но это не значит, что можно мерджить мусор. Перед мерджем:
+
+```bash
+npm run typecheck     # должно быть 0 ошибок
+npm run build         # должно собраться без ошибок
+```
+
+И сделайте ручной smoke-test (см. [Contributing](/docs/developers/contributing#тесты)).
+
+## Откат / hotfix
+
+Если опубликованная версия сломанная:
+
+```bash
+# на master:
+git revert <broken-commit>
+git push origin master
+
+# auto-release создаст новый patch с откатом
+```
+
+`npm unpublish` нельзя — у npm есть 72-часовой rule для unpublish, и он ломает пользователей. Лучше — выпускать новый patch с фиксом.
+
+Docker-теги можно перетягивать (`latest`), но мульти-арч теги (`vX.Y.Z`) — immutable.
+
+## Зависимости
+
+- Обновляем зависимости вручную (без Dependabot для большей части — он шумный). Когда выходит крупный апдейт grammy / openai SDK / anthropic SDK — открываем PR с явным changelog для пользователей.
+- Lockfile (`package-lock.json`) **обязателен** в коммитах. CI использует `npm ci` — он требует lockfile.
+
+## Security advisories
+
+Если в зависимости найдена CVE с критическим уровнем — выпускаем patch в течение 24ч (если возможно). Через `npm audit fix` + ручной тест. Auto-release дотащит до npm/Docker автоматически.
+
+## Где смотреть статус
+
+- npm: [npmjs.com/package/@thesashadev/girl-agent](https://www.npmjs.com/package/@thesashadev/girl-agent)
+- GHCR: [github.com/TheSashaDev/girl-agent/pkgs/container/girl-agent](https://github.com/TheSashaDev/girl-agent/pkgs/container/girl-agent)
+- Releases / tags: [github.com/TheSashaDev/girl-agent/tags](https://github.com/TheSashaDev/girl-agent/tags)
+- Changelog: [CHANGELOG.md](https://github.com/TheSashaDev/girl-agent/blob/master/CHANGELOG.md) в репо.

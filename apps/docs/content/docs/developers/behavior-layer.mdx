@@ -1,0 +1,187 @@
+---
+title: Behavior layer
+description: behaviorTick() — LLM-решение «отвечать / игнорить / реагировать»
+---
+
+Behavior layer — это **отдельный** LLM-вызов перед основным ответом. Он не пишет финальный текст. Он решает только: отвечать ли, через сколько секунд, сколько пузырей, какую реакцию ставить, как изменился mood. Если решение — «не отвечать», основной LLM-вызов не происходит вообще.
+
+Файл: `src/engine/behavior-tick.ts`.
+
+## Сигнатура
+
+```ts
+export async function behaviorTick(
+  llm: LLMClient,
+  cfg: ProfileConfig,
+  recentHistory: { role: "user" | "assistant"; content: string }[],
+  incoming: string,
+  ctx: BehaviorContext = {}
+): Promise<BehaviorTickResult>;
+
+interface BehaviorContext {
+  presence?: PresenceState;
+  conflict?: ConflictState;
+  conflictColdActive?: boolean;
+  blockHint?: string;
+  activeDialog?: boolean;
+  recentIncomingIds?: Array<{ messageId: number; text: string }>;
+}
+```
+
+`BehaviorTickResult` (см. `src/types.ts`):
+
+```ts
+interface BehaviorTickResult {
+  shouldReply: boolean;
+  shouldRead: boolean;
+  delaySec: number;
+  bubbles: number;
+  typing: boolean;
+  ignoreReason?: string;
+  moodDelta: Partial<Record<"interest" | "trust" | "attraction" | "annoyance" | "cringe", number>>;
+  intent: "reply" | "ignore" | "short" | "left-on-read" | "leave-chat" | "reaction-only";
+  reaction?: string;
+  reactionTargetMessageId?: number;
+}
+```
+
+## LLM-промпт (упрощённо)
+
+```
+SYS:
+Ты — внутренний "decision layer" ... Никаких разговоров — только JSON.
+
+USER:
+Состояние:
+stage=tg-given-warming (Дала тг, отвечает осторожно)
+score={"interest":30,"trust":15,...}
+base_ignore=0.18
+base_delay=30..1200s
+communication={notifications:normal, messageStyle:balanced, ...}
+СКЛОННОСТЬ К ИГНОРУ: 35/100
+
+Присутствие: онлайн (локально 14:00). На связи, реагирует быстро.
+Что сейчас делает: пара, тренировка
+Конфликт: level 0
+
+Последние сообщения (последнее — от него):
+он: привет
+она: привет)
+он: что делаешь?
+
+НОВОЕ сообщение от него:
+"""как настроение?"""
+
+Доступные реакции (СТАДИЯ ТЁПЛАЯ — ...):
+- ❤ / 🥰 / 🥹 — ...
+
+Реши и верни СТРОГО JSON:
+{ "intent": ..., "shouldReply": ..., ... }
+```
+
+Полный шаблон — функция `TEMPLATE` в `behavior-tick.ts`.
+
+## Детерминированные shortcut'ы (без LLM)
+
+Чтобы не тратить токены, есть три fast-path:
+
+1. **activeDialog && !conflictColdActive** — короткий ответ, малая задержка, без LLM.
+   ```ts
+   if (ctx.activeDialog && !ctx.conflictColdActive) {
+     return { shouldReply: true, delaySec: clamp(activeDialogDelay(comm), 2, 180), bubbles: sampleBubbles(comm, true), ... };
+   }
+   ```
+2. **conflictColdActive** — с вероятностью 80% сразу ignore без вызова LLM.
+3. **asleep && !nightAwake** — с вероятностью 85% `left-on-read`, shouldRead=false.
+
+В остальных случаях вызывается LLM в JSON-mode с `temperature=0.7, maxTokens=3500`.
+
+## Sanitize ответа
+
+После парсинга JSON применяется ряд правил:
+
+- **`reaction`** — клампится по словарю `reactionMenu(stage, score)`. Если LLM выдал «запрещённый» эмодзи для текущей стадии (например, 💀 на влюблённой стадии), реакция отбрасывается. См. `sanitizeReaction`.
+- **`canRecoverReply`** — если LLM выбрал ignore, но стадия тёплая и score высокий, с шансом 10–60% переводим в short reply. Защита от «нечего ей отвечать на трогательное сообщение».
+- **`adjustDelay`** — кламп задержки по communication.notifications и activeDialog:
+  - `priority` → коэффициент 0.7,
+  - `muted` → +30% к задержке,
+  - `activeDialog` → cap 180 с.
+- **`normalizeBubbles`** — учитывает `messageStyle`:
+  - `one-liners` → bubbles = 1 почти всегда,
+  - `bursty` → bubbles в 2..5,
+  - `longform` → bubbles в 1..3 но длиннее.
+
+## Catch-fallback (без LLM)
+
+Если LLM упал/таймаут/невалидный JSON — `try/catch` возвращает ответ из stage defaults:
+
+```ts
+const ignore = Math.random() < stage.defaults.ignoreChance * ignoreMul;
+const [lo, hi] = stage.defaults.replyDelaySec;
+return {
+  shouldReply: !ignore,
+  shouldRead: true,
+  delaySec: ignore ? 0 : randomInt(lo, hi),
+  bubbles: ignore ? 1 : sampleBubbles(communication, false),
+  typing: !ignore,
+  moodDelta: {},
+  intent: ignore ? "ignore" : "reply",
+  ignoreReason: ignore ? "fallback-ignore" : undefined
+};
+```
+
+Это гарантирует, что отказ LLM не вешает runtime.
+
+## Reaction menu
+
+Меню доступных эмодзи зависит от **тёплая / нейтральная / холодная** определения по стадии и `attraction/annoyance` в score:
+
+- **Тёплая** (`attraction > 30` или `dating-*` / `long-term`) — `❤ 🥰 🥹 😂 🤭 🔥 👀 🥺 😅`, запрещено `🤡 💀 🤮 🖕 😐 🙄`.
+- **Холодная** (`annoyance > 40` или `tg-given-cold`) — `👍 👌 😐 🙄 🤡 💀 🤔`, запрещено `❤ 🥰 🥹 🥺 🔥`.
+- **Нейтральная** — `👍 👌 😂 🤭 🤔 🔥 🤡 😐`.
+
+См. функцию `reactionMenu(stage, score)`.
+
+## reactionTargetMessageId
+
+Девушки в Telegram часто реагируют не на последнее сообщение, а на одно из предыдущих в бурсте. Чтобы это сэмулировать, в LLM передаются ID последних 10 входящих:
+
+```
+Последние его сообщения (для reactionTargetMessageId):
+  id=4123: "слушай"
+  id=4124: "у тебя есть планы на выходные"
+  id=4125: "хочу позвать тебя"
+```
+
+LLM может вернуть `"reactionTargetMessageId": 4124` — Runtime поставит реакцию на сообщение id=4124, а не на последнее. Если ID невалиден или вне списка, fallback на `m.messageId`.
+
+## intent ↔ shouldReply
+
+| `intent` | `shouldReply` | Что произойдёт |
+|----------|---------------|----------------|
+| `reply` | true | Полный ответ с пузырями. |
+| `short` | true | Один-два коротких пузыря, `bubbles ≤ 2`. |
+| `ignore` | false | Эмит `ignored`, ничего не отправляется. Опционально `setReaction`. |
+| `left-on-read` | false | `shouldRead=true`, `userbot.readHistory()`. UI видит «прочитано». |
+| `leave-chat` | false | `userbot.readHistory()` + `block`/silent (по стадии). |
+| `reaction-only` | false | Только `setReaction`, без ответа. |
+
+## Где использовать
+
+В норме — нигде, кроме `Runtime.handleIncoming`. Но вы можете вызвать `behaviorTick` напрямую, например, в тестах:
+
+```ts
+import { behaviorTick } from "./engine/behavior-tick.js";
+import { makeLLM } from "./llm/index.js";
+
+const llm = makeLLM(cfg.llm);
+const tick = await behaviorTick(llm, cfg, [
+  { role: "user", content: "привет" },
+  { role: "assistant", content: "привет)" },
+  { role: "user", content: "как настроение?" }
+], "как настроение?");
+
+console.log(tick);
+```
+
+Helper'ы (`sampleBubbles`, `sanitizeReaction`, и т.п.) — не экспортированы; они приватные внутри файла. Если очень нужно — поднимите экспорт PR'ом, но обоснуйте use-case.

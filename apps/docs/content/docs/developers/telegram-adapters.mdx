@@ -1,0 +1,145 @@
+---
+title: Telegram-адаптеры
+description: TgAdapter — bot (grammy) и userbot (gramJS)
+---
+
+Файл интерфейса: `src/telegram/index.ts`. Имплементации: `bot.ts`, `userbot.ts`. Фабрика: `makeTgAdapter(cfg)`.
+
+## Контракт
+
+```ts
+export interface TgAdapter {
+  start(onMessage: (m: IncomingMessage) => void): Promise<void>;
+  sendText(chatId: number | string, text: string, opts?: SendOpts): Promise<{ messageId: number }>;
+  setTyping(chatId: number | string, durationSec: number): Promise<void>;
+  setReaction(chatId: number | string, messageId: number, emoji: string): Promise<void>;
+  editText(chatId: number | string, messageId: number, text: string): Promise<void>;
+  deleteMessages(chatId: number | string, ids: number[]): Promise<void>;
+  sendSticker(chatId: number | string, emojiOrFileId: string): Promise<void>;
+  updateOnlineStatus(online: boolean): Promise<void>;     // no-op для bot
+  blockContact(chatId: number | string): Promise<void>;   // no-op для bot
+  unblockContact(chatId: number | string): Promise<void>;
+  readHistory(chatId: number | string): Promise<void>;
+  reportSpam(chatId: number | string): Promise<void>;
+  getSelf(): Promise<{ id: number; username?: string; firstName?: string }>;
+  stop(): Promise<void>;
+}
+
+export interface IncomingMessage {
+  text: string;
+  fromId: number | string;
+  chatId: number | string;
+  messageId: number;
+  isPrivate: boolean;
+  fromName?: string;
+  media?: IncomingMedia;
+  emojiReaction?: { emoji: string; targetMessageId: number };
+  deletion?: { messageIds: number[] };
+}
+
+export interface IncomingMedia {
+  kind: "photo" | "video" | "voice" | "video_note" | "sticker" | "document";
+  caption?: string;
+  mimeType?: string;
+  base64?: string;     // только для фото / стикер-превью
+  fileId?: string;
+  emoji?: string;      // для стикеров
+}
+```
+
+## Bot-режим (`bot.ts`)
+
+Использует [`grammy`](https://grammy.dev). Один токен бота. Преимущества: легально, не блочится Telegram'ом, простой setup. Ограничения: нет «онлайна», нет «прочитано», нет реакций на чужие сообщения (только если бот в чате с правами).
+
+Ключевые отображения:
+
+| Метод | Grammy API |
+|-------|-----------|
+| `start` | `bot.on("message", ...)` + `bot.start({ drop_pending_updates: true })` |
+| `sendText` | `bot.api.sendMessage` с парсингом markdown в HTML |
+| `setTyping` | `bot.api.sendChatAction(..., "typing")` |
+| `setReaction` | `bot.api.setMessageReaction` |
+| `deleteMessages` | `bot.api.deleteMessage` (по одному) |
+| `sendSticker` | `bot.api.sendSticker(emoji|fileId)` — emoji → ищет ближайший sticker в `stickers.md` |
+| `updateOnlineStatus` | no-op |
+| `blockContact` / `unblockContact` | no-op (нет API) |
+| `readHistory` | no-op |
+| `reportSpam` | no-op |
+
+`onMessage` фильтр: только `msg.chat.type === "private"`, опционально по `cfg.privacy/whitelist/ownerId`. Все прочие — отбрасываются молча.
+
+## Userbot-режим (`userbot.ts`)
+
+Использует [`telegram`](https://github.com/gram-js/gramjs) (gramJS). Логин по номеру телефона + код + опционально 2FA. Сессия — `StringSession` в `config.telegram.session`.
+
+Возможности (которых нет у bot):
+
+- `updateOnlineStatus(online)` — `account.UpdateStatus({ offline: !online })`.
+- `blockContact / unblockContact` — `contacts.Block / contacts.Unblock`.
+- `readHistory` — `messages.ReadHistory`.
+- `reportSpam` — `messages.ReportSpam`.
+- Реакция на любое сообщение, реакция эмодзи (`messages.SendReaction`).
+- Удаление **чужих** сообщений видно (`messages.OnDeletedMessage` — emit'ит `deletion` событие).
+- Реакция эмодзи юзера — отдельный event listener (`UpdateMessageReactions`).
+
+Минусы:
+
+- Userbot'ы рискуют получить бан/ограничение по правилам Telegram. Это пишется в [Telegram modes](/docs/users/telegram-modes).
+- Логин требует MTProto, что сложнее в Docker (но мы поддерживаем — `tg-session.txt` mount'ится).
+
+## Логин flow (userbot)
+
+Два пути:
+
+1. **Remote-proxy login** — серверный helper (`remoteSendCode`, `remoteVerifyCode`, `remoteVerifyPassword`). Удобно, потому что не надо хранить свой `api_id/api_hash`. См. `telegram/remote-auth.ts`.
+2. **Self-login** — пользователь сам кладёт `api_id/api_hash` в форму. Запускается `userbotLogin({ apiId, apiHash, phone, promptCode, promptPassword })`, который через gramJS callbacks ждёт `code` и `password`.
+
+WebUI обёртывает оба через `routes/tg-auth.ts`:
+
+```
+POST /api/tg/userbot/send-code      { phone }                            → { loginToken } | { sessionId }
+POST /api/tg/userbot/verify-code    { loginToken|sessionId, code }       → { sessionString, apiId, apiHash } | { needs2fa }
+POST /api/tg/userbot/verify-password{ loginToken|sessionId, password }   → { sessionString, apiId, apiHash }
+```
+
+После успешного логина WebUI сохраняет `sessionString/apiId/apiHash` в `cfg.telegram` (`PUT /api/profiles/:slug`).
+
+## Прокси
+
+В `cfg.telegram.proxy` можно прокинуть SOCKS4/5 или MTProxy:
+
+```ts
+proxy: { ip: "1.2.3.4", port: 1080, socksType: 5 }
+proxy: { ip: "1.2.3.4", port: 443, MTProxy: true, secret: "deadbeef..." }
+```
+
+В `server.ts → parseTelegramProxy` есть парсер `tg://proxy?server=...&port=...&secret=...` и `socks5://user:pass@host:port`.
+
+## Markdown → entities
+
+`telegram/markdown.ts` конвертит markdown ответ LLM в Telegram entities (bold, italic, code, link). Для bot — Grammy умеет HTML, мы конвертим в HTML. Для userbot — gramJS принимает entities-массив.
+
+## Sticker library
+
+В `cfg` нет сток-стикер-pack'ов. Файл `stickers.md` генерируется при создании профиля (`engine/persona-gen.ts → generateStickers`) и содержит «парные» эмодзи + favourite sets. `sendSticker(emoji)`:
+
+1. Ищет в `stickers.md` секцию с этим эмодзи.
+2. Если есть — пытается отправить из `cfg.telegram.knownStickers` (set накопленных fileId'ов).
+3. Если нет — fallback на обычный текст с этим эмодзи.
+
+Userbot также периодически собирает file_id из приходящих стикеров и кладёт в `knownStickers`.
+
+## getSelf()
+
+Возвращает `{ id, username, firstName }` бота или юзера. Нужно `Runtime`'у, чтобы:
+
+- понять, в каких чатах он — owner;
+- распознать упоминания (`@username` или `me`);
+- корректно рендерить логи UI («ты сказал ...»).
+
+## Конвенции для нового кода
+
+- **Не используйте `bot.api.X` напрямую** в engine/. Только через `TgAdapter`. Иначе ломается переключение между bot/userbot.
+- **Все методы — async.** Никаких блокирующих send'ов.
+- **Ошибки — пробрасывайте.** Runtime ловит и эмитит `error` событие.
+- **`stop()` идемпотентен.** Можно вызвать дважды — не должно падать.

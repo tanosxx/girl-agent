@@ -1,0 +1,33 @@
+{
+  "title": "Для пользователей",
+  "description": "Установка, настройка и использование — без кода",
+  "icon": "Sparkles",
+  "root": true,
+  "pages": [
+    "index",
+    "quick-start",
+    "installation",
+    "---WebUI и первый запуск---",
+    "webui",
+    "setup-wizard",
+    "telegram-modes",
+    "---Поведение---",
+    "llm-providers",
+    "communication-profiles",
+    "stages",
+    "presence-and-sleep",
+    "memory",
+    "agenda",
+    "conflict",
+    "media",
+    "---Управление---",
+    "commands",
+    "addons",
+    "updating",
+    "backup-restore",
+    "---Помощь---",
+    "troubleshooting",
+    "faq",
+    "security-privacy"
+  ]
+}

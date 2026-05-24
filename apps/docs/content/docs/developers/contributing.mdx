@@ -1,0 +1,120 @@
+---
+title: Contributing
+description: Гайдлайны разработки, code style, PR workflow
+---
+
+Спасибо, что хотите поучаствовать. Этот документ — короткий гайд по тому, как мы делаем PR'ы и что любим/не любим в коде.
+
+## Setup
+
+```bash
+git clone https://github.com/TheSashaDev/girl-agent.git
+cd girl-agent
+npm install
+cd webui && npm install && cd ..
+npm run build
+npm run typecheck
+```
+
+Подробнее — [Getting started](/docs/developers/getting-started).
+
+## Ветки и коммиты
+
+- Главная ветка — `master`. PR'ы делаем в неё.
+- Имя ветки — короткое и осмысленное: `fix/sleep-leak`, `feat/new-llm-preset`, `docs/runtime-explanation`.
+- Один PR — одна логическая правка. Не смешивайте «новый LLM + рефактор runtime + опечатки в README» в один PR.
+
+### Conventional commits
+
+Не обязательно, но желательно:
+
+```
+feat(llm): add Mistral preset
+fix(runtime): don't crash on empty messages
+refactor(memory): extract palace mining into helper
+docs(addons): explain config.patch.json
+chore: bump grammy to 1.31
+```
+
+Auto-release парсит коммиты в changelog (см. [Release](/docs/developers/release)). Чем читаемее тон — тем красивее changelog.
+
+## Code style
+
+### TypeScript
+
+- `strict: true` в `tsconfig.json` — всё типизировано.
+- Не используйте `any`. Если не знаете точный тип — используйте `unknown` + narrowing.
+- Не используйте `getattr` / `setattr` / dynamic property access — это лень. Прочтите тип.
+- Импорты в **верху файла**, не внутри функций.
+- Расширения путей в import'ах — `.js` (потому что compile target — ESM).
+
+### Naming
+
+- Функции и переменные — `camelCase`.
+- Типы и интерфейсы — `PascalCase`.
+- Константы — `SCREAMING_SNAKE_CASE` только для **истинных** констант (URL, regex, magic numbers). Локальные `const x = 5` — `camelCase`.
+- Файлы — `kebab-case.ts`. Один экспорт-первого класса на файл.
+
+### Комментарии
+
+Дефолт — **нет комментариев**. Бьёмся за лаконичность.
+
+- Хороший комментарий: «это делает X, см. RFC Y». Описание общей логики.
+- Плохой комментарий: «это исправление бага #1234», «здесь раньше было это, теперь так», «теперь мы также проверяем Z». Это нужно описать в PR-description / changelog, а не в коде.
+
+### Структура модулей
+
+- Каждый модуль — папка с `index.ts` (если их много) или одиночный файл (если он один).
+- Логика разбита по доменам: `behavior/`, `presence/`, `memory/`, `agenda/`, `webui/`, `llm/`, `tg/`.
+- Cross-cutting: `storage/md.ts`, `types.ts`, `presets/`. Не плодите хелперов.
+
+## Тесты
+
+Полноценного юнит-тест-фреймворка пока нет (cost/benefit для прототипа). Но прежде чем мерджить — **проверьте вручную**:
+
+- WebUI: создайте профиль, поговорите с ботом, проверьте, что score меняется.
+- CLI: `npm run dev -- --help`, `npm run dev -- --list`, `npm run dev -- server --print-config`.
+- Headless: `npm run dev -- --profile=test --json-events`, отправьте `:status`, проверьте `response`.
+- Если меняли поведение LLM — `POST /api/profiles/:slug/test-llm`.
+- Если меняли auth — попробуйте с/без пароля, с/без `GIRL_AGENT_WEBUI_TOKEN`.
+
+Если ваш PR требует особого тестового сценария — опишите его в PR-description.
+
+## Что НЕ делать
+
+- ❌ Менять структуру `~/.local/share/girl-agent/data` **без** миграции. Если поменяли поля в `config.json` — добавьте миграцию (см. [Migrations](/docs/developers/migrations#добавление-новой-миграции)).
+- ❌ Кидать `process.exit()` из любого места, кроме `cli.ts`, `server.ts`, `migrations/index.ts`. Возвращайте ошибки через throw / Promise reject.
+- ❌ Делать sync I/O (`fs.readFileSync`, `child_process.execSync`) в горячих путях (Runtime, behaviorTick, LLM-вызовы). Только в `cli.ts` / тестовых утилитах.
+- ❌ Хранить state в module-level переменных. Это ломает multi-profile сценарии. Кладите state внутрь Runtime / TgAdapter / соответствующего класса.
+- ❌ Логировать `apiKey`, `sessionString`, `botToken`, `password`. Никогда.
+- ❌ Делать breaking changes в headless-protocol / REST API без явного `protocolVersion` bump.
+
+## Что любим
+
+- ✅ Маленькие, фокусированные PR'ы.
+- ✅ Хорошие имена. `applyLLMUpdate` лучше, чем `updateLLM`.
+- ✅ Чистые stack traces. Не глотайте ошибки `try { ... } catch {}`; либо обработайте, либо пропустите.
+- ✅ Документация рядом с кодом. Если ввели новую фичу — обновите этот сайт (`apps/docs/content/docs/`).
+- ✅ JSDoc для публичных функций (`runtime.start`, `makeLLM`, `runMigrations`).
+
+## CI
+
+В репозитории есть три workflow'а:
+
+- **`auto-release.yml`** — раз в час bump'ит patch-версию, если есть новые коммиты. Под капотом — LLM-генерация changelog (GitHub Models API). См. [Release](/docs/developers/release).
+- **`docker-publish.yml`** — собирает multi-arch (amd64+arm64) образ и пушит в `ghcr.io/thesashadev/girl-agent`.
+- **`npm-publish.yml`** — публикует пакет на npm под `@thesashadev/girl-agent`.
+
+Все три запускаются автоматически после успешного релизного тега `v*`.
+
+## PR review
+
+- Любой PR требует ревью владельца репо (`@TheSashaDev`).
+- Если PR — большой (>500 строк), разбейте на несколько / напишите план в issue.
+- Devin тоже может ревьюить PR'ы — оставит inline-комментарии. На них стоит реагировать (либо исправить, либо обосновать «почему нет»).
+
+## Что-то ещё?
+
+- Откройте [issue](https://github.com/TheSashaDev/girl-agent/issues), если непонятно, как лучше сделать.
+- В коммитах не любим эмодзи (Cog не любит, и я тоже не люблю).
+- Не пушите дочерние артефакты (`dist/`, `webui/dist/`, `apps/docs/.next/`, `apps/docs/out/`) в master. Они в `.gitignore`.

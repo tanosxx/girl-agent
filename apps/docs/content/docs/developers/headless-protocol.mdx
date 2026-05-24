@@ -1,0 +1,161 @@
+---
+title: Headless protocol (NDJSON)
+description: Контракт stdout/stdin для wrapper-приложений
+---
+
+Файл: `src/headless.ts`. Запускается одним из двух способов:
+
+```bash
+girl-agent --profile=<slug> --json-events
+girl-agent --profile=<slug> --headless
+girl-agent server --config=bot.json --headless    # server mode + headless
+```
+
+Этот протокол **стабилен**. Wrapper'ы (girl-agent-desktop и т.п.) на него полагаются. Расширять можно — ломать только синхронно с обвязкой.
+
+## Формат
+
+- Каждая строка stdout — одна **NDJSON** запись (`JSON.stringify(obj) + "\n"`).
+- Каждая строка stdin — одна **команда**, начинающаяся с `:`.
+- На команду отвечаем `{ "type": "response", "ok": boolean, "text": string }`.
+- На SIGINT/SIGTERM — graceful shutdown с `{ "type": "stopped" }` в конце.
+
+## События stdout
+
+### `ready`
+
+Эмитится один раз при старте:
+
+```json
+{ "type": "ready", "profile": { "slug": "alice", "name": "Алиса", "age": 19, "mode": "bot", "nationality": "RU", "tz": "Europe/Moscow", "stage": { "id": "tg-given-cold", "num": 2, "label": "знакомство" } } }
+```
+
+### `score` (snapshot)
+
+После `ready`, шлётся текущий snapshot отношений:
+
+```json
+{ "type": "score", "score": { "interest": 50, "trust": 30, "attraction": 40, "annoyance": 15, "cringe": 10 }, "t": 1715865000000 }
+```
+
+Если профиль свежий и `relationship.md` ещё нет — событие пропускается.
+
+### Runtime events
+
+Затем — все события Runtime в реальном времени:
+
+```json
+{ "type": "incoming", "chatId": 123, "text": "привет", "t": 1715865001000 }
+{ "type": "outgoing", "chatId": 123, "text": "хей", "delay": 4.2, "bubbles": 1, "t": 1715865005000 }
+{ "type": "ignored", "chatId": 123, "reason": "asleep", "t": 1715865006000 }
+{ "type": "score", "score": { "interest": 51, ... }, "delta": { "interest": +1 }, "t": 1715865010000 }
+{ "type": "info", "text": "пинг агенды", "t": 1715865011000 }
+{ "type": "error", "text": "LLMRateLimitError: 429", "t": 1715865012000 }
+```
+
+`t` — timestamp millis (Date.now()).
+
+### `stopped`
+
+При выходе:
+
+```json
+{ "type": "stopped", "t": 1715865030000 }
+```
+
+После этого процесс завершается с кодом 0.
+
+## Команды stdin
+
+Всё, что начинается с `:` — команда. Иначе — `{ "type": "response", "ok": false, "text": "команды начинаются с :" }`.
+
+| Команда | Аргументы | Что делает |
+|---------|-----------|-----------|
+| `:status` | — | компактный текст со стадией, score, conflict, asleep |
+| `:model` | `<presetId> <model>` или пусто | сменить или показать LLM |
+| `:reset` | — | сброс отношений в нулевое |
+| `:stage` | `<id или num>` | задать стадию вручную |
+| `:wake` | `[chatId]` | разбудить (15 мин окно) |
+| `:debug` | `[chatId]` | дамп состояния для дебага |
+| `:why` | `[chatId]` | объяснение последнего решения |
+| `:amnesia` | `<scope> [arg]` | стереть память (см. ниже) |
+| `:sticker` | `<emoji>` | отправить стикер (тестовое) |
+| `:pause` | — | пауза runtime (события идут, но он не пишет) |
+| `:resume` | — | снять паузу |
+| `:cringe` | — | показать счётчик cringe |
+| `:relationship` | — | stage + score |
+| `:persona` | — | первые 4000 символов `persona.md` |
+| `:log` | `[day] [limit]` | хвост `log/<day>.md` (default today, 3000 байт) |
+| `:snapshot` | — | агрегированный snapshot профиля + score + stage |
+| `:help` | — | список команд |
+| `:quit` или `:exit` | — | graceful stop |
+
+Аргументы — split по пробелу. Если в аргументах должен быть пробел — кодируйте как `_` или `+` (зависит от команды; см. описание).
+
+### Особый ответ — `:snapshot`
+
+Возвращает не `response`, а отдельное событие:
+
+```json
+{
+  "type": "snapshot",
+  "t": 1715865000000,
+  "paused": false,
+  "profile": { "slug": "alice", "name": "Алиса", "age": 19, "mode": "bot", "tz": "Europe/Moscow", "stage": {...} },
+  "stage": { "id": "convinced", "num": 4, "label": "согласилась общаться" },
+  "score": { "interest": 50, "trust": 30, ... }
+}
+```
+
+Без последующего `response`. Это сделано, чтобы у wrapper'а был удобный single-event снимок.
+
+## `:amnesia`
+
+```
+:amnesia today
+:amnesia date 2026-05-15
+:amnesia chat <chatId>
+:amnesia all
+```
+
+| scope | что стирает |
+|-------|------------|
+| `today` | удаляет лог сегодняшней сессии |
+| `date <YYYY-MM-DD>` | удаляет лог конкретного дня |
+| `chat <chatId>` | удаляет всю историю переписки с конкретным чатом |
+| `all` | очищает все логи, daily summaries, memory/* (без удаления profile) |
+
+⚠️ Деструктивно. UI всегда требует подтверждения. Wrapper'ам — на ваше усмотрение.
+
+## Контракт ошибок
+
+Любая ошибка в команде → `{ "type": "response", "ok": false, "text": "err: <message>" }`. **Не падаем**, чтобы wrapper не лишался лог-стрима.
+
+Однако ошибки runtime (LLM, telegram) приходят как `{ "type": "error", "text": "..." }` параллельно — это **не** ответ на команду, это асинхронное событие.
+
+## Пример wrapper'а
+
+```ts
+import { spawn } from "node:child_process";
+import readline from "node:readline";
+
+const proc = spawn("girl-agent", ["--profile=alice", "--json-events"], { stdio: ["pipe", "pipe", "inherit"] });
+const rl = readline.createInterface({ input: proc.stdout });
+
+rl.on("line", (line) => {
+  const ev = JSON.parse(line);
+  console.log("event:", ev.type, ev);
+});
+
+// через 5 секунд — пинг
+setTimeout(() => proc.stdin.write(":status\n"), 5000);
+
+// выход через 1 минуту
+setTimeout(() => proc.stdin.write(":quit\n"), 60_000);
+```
+
+## Версионирование
+
+В `ready` нет поля `protocolVersion` — мы держим протокол совместимым.
+
+Если когда-то понадобится breaking change — добавим `protocolVersion: "2"` в `ready`. Wrapper'ы должны падать gracefully на неизвестных полях / событиях (`type === "..."` switch с `default`-веткой, которая логирует и пропускает).

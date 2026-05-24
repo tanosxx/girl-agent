@@ -1,0 +1,132 @@
+---
+title: CLI и режимы запуска
+description: Один бинарь — четыре режима. WebUI, server, headless, utilities.
+---
+
+Файл: `src/cli.ts`. Точка входа в `bin/girl-agent` (`dist/cli.js` после сборки).
+
+Парсер аргументов — `mri`. Логика:
+
+1. Если есть `addon` саб-команда → `runAddonCommand`.
+2. Если есть `update` → `runUpdateCommand`.
+3. Если есть `--server` или `server` саб-команда → `runServer`.
+4. Если есть `--json-events` или `--headless` без `server` → headless обёртка над WebUI'ным профилем.
+5. Иначе → WebUI (`startWebUIServer`).
+
+## Режим 1: WebUI (по умолчанию)
+
+```bash
+npx girl-agent
+# или
+girl-agent
+```
+
+Запускает HTTP-сервер на `--port` (default 3000) и `--host` (default 127.0.0.1). Открывает браузер автоматически (`open` на macOS, `xdg-open` на Linux, `start` на Windows).
+
+Флаги:
+
+| Флаг | Описание |
+|------|----------|
+| `--port=3000` | TCP-порт |
+| `--host=127.0.0.1` | bind адрес |
+| `--no-open` | не открывать браузер |
+| `--auth=password` | включить аутентификацию (можно также `GIRL_AGENT_WEBUI_PASSWORD`) |
+| `--data=./data` | переопределить `GIRL_AGENT_DATA` |
+
+Никаких других опций тут не парсится — настройка идёт через UI и REST API.
+
+## Режим 2: Server (non-TTY automation)
+
+```bash
+girl-agent server --print-config > bot.json
+# отредактируй bot.json
+girl-agent server --config bot.json
+girl-agent server --config bot.json --headless
+
+girl-agent server --list
+girl-agent server --profile=alice --headless
+```
+
+Подробнее: [Server mode](/docs/developers/server-mode).
+
+Особенности:
+
+- Поддерживает все env vars `GIRL_AGENT_MODE`, `_TOKEN`, `_API_PRESET`, `_API_KEY`, `_NAME` и т.п. — удобно для CI / k8s secrets / docker -e.
+- `--print-systemd` / `--print-docker` выводят готовые юниты / Dockerfile / docker-compose.
+- `--set-model` / `--delete-profile` — non-TTY утилиты редактирования профиля.
+
+## Режим 3: Headless (NDJSON-events)
+
+```bash
+girl-agent --profile=alice --json-events
+# или
+girl-agent --headless --profile=alice
+```
+
+Запускается **поверх существующего профиля** (CLI стандартный flow без WebUI). Получает все события Runtime как NDJSON в stdout, читает команды (`:status`, `:why`, ...) из stdin.
+
+Это интерфейс для **wrapper-приложений** (desktop, тестовые скрипты). Подробнее: [Headless protocol](/docs/developers/headless-protocol).
+
+## Режим 4: Quick utilities
+
+Не запускают runtime, просто делают одно действие и выходят.
+
+| Команда | Что делает |
+|---------|-----------|
+| `girl-agent --list` | Список профилей и `data dir`. |
+| `girl-agent --delete-profile=<slug>` | Удалить профиль. С подтверждением. |
+| `girl-agent --set-model --profile=<slug> --api-preset=<id> --model=<m>` | Сменить LLM-настройку профиля. |
+| `girl-agent update` | Применить data-миграции к существующим профилям. |
+| `girl-agent addon pack <dir>` | Запаковать папку с manifest.json в `.gaa`. |
+| `girl-agent addon init [name]` | Создать скелет нового аддона. |
+
+## Запуск из dev
+
+```bash
+npx tsx src/cli.ts                           # = WebUI
+npx tsx src/cli.ts server --list
+npx tsx src/cli.ts --profile=alice --json-events
+```
+
+Можно прокидывать `GIRL_AGENT_DATA=$PWD/.dev-data` для изолированной разработки.
+
+## Code structure
+
+```ts
+// src/cli.ts (упрощённо)
+async function main() {
+  const argv = mri(process.argv.slice(2), { ... });
+
+  if (argv._[0] === "addon")  return runAddonCommand(argv);
+  if (argv._[0] === "update") return runUpdateCommand(argv);
+  if (argv._[0] === "server" || argv.server) return runServer(argv);
+
+  if (argv.list)            { /* list profiles */ return; }
+  if (argv["delete-profile"]) { /* delete */ return; }
+  if (argv["set-model"])      { /* set model */ return; }
+
+  if (argv.profile && (argv["json-events"] || argv.headless)) {
+    const cfg = await readConfig(argv.profile);
+    if (!cfg) { process.stderr.write(`profile not found\n`); process.exit(1); }
+    const rt = new Runtime(cfg);
+    await rt.start();
+    await runHeadlessJsonEvents(rt);
+    return;
+  }
+
+  await startWebUIServer({ port: argv.port ?? 3000, host: argv.host ?? "127.0.0.1", openBrowser: !argv["no-open"] });
+}
+```
+
+## process.exit policy
+
+Только cli.ts / server.ts / migrations имеют право вызывать `process.exit`. В runtime и WebUI его быть не должно — иначе один баг убивает все профили.
+
+## stdin/stdout
+
+- **WebUI**: stdout — лог (никаких JSON, просто строки `[server] ...`). stderr — ошибки.
+- **Server без `--headless`**: stdout — события Runtime в текстовом виде, stderr — служебное.
+- **Headless / `--json-events`**: stdout — NDJSON, stderr — служебное. stdin — команды.
+- **Quick utilities**: stdout — результат, stderr — ошибки.
+
+Если ваш wrapper ловит stdout — обязательно используйте `--json-events`, иначе будете путаться в смешанном выводе.

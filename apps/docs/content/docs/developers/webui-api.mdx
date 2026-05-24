@@ -1,0 +1,226 @@
+---
+title: WebUI REST API
+description: HTTP-эндпоинты — профили, пресеты, аддоны, MCP, auth
+---
+
+WebUI бэкенд — обычный HTTP-сервер (`node:http`, без Express). Роутер — `src/webui/http.ts`. Эндпоинты регистрируются в `routes/*.ts`.
+
+## Базовое
+
+- Default port: `3000`, host: `127.0.0.1`.
+- Все JSON-ответы — `application/json; charset=utf-8`.
+- Body для POST/PUT — JSON. Парсер ограничен ~1MB (без stream'а).
+- 4xx ошибки → `{ "error": "<message>" }` с правильным статусом.
+- 5xx → `{ "error": "internal" }` + полный stack в stderr.
+
+## Auth
+
+См. [auth route](#auth). Если `GIRL_AGENT_WEBUI_PASSWORD` или `GIRL_AGENT_WEBUI_TOKEN` задан — все запросы требуют либо `Cookie: girl_agent_auth=...`, либо `Authorization: Bearer <token>`.
+
+`GIRL_AGENT_WEBUI_TOKEN` сравнивается с `Authorization: Bearer ...` через `crypto.timingSafeEqual`. Можно использовать в headless-сценариях (CI, мониторинг).
+
+## Профили
+
+### `GET /api/profiles`
+Список профилей с минимальной мета-инфой и статусом runtime:
+
+```json
+{
+  "profiles": [
+    { "slug": "alice", "name": "Алиса", "age": 19, "nationality": "RU", "stage": "convinced", "mode": "bot",
+      "status": "running", "startedAt": 1715865000000, "lastError": null }
+  ],
+  "dataRoot": "/home/u/.local/share/girl-agent/data"
+}
+```
+
+### `GET /api/profiles/:slug`
+Полный `ProfileConfig` + статус.
+
+```json
+{ "config": { ... }, "status": { "state": "running", "startedAt": ..., "lastError": null } }
+```
+
+### `POST /api/profiles`
+Создание профиля. Поля — `Partial<ProfileConfig>`, минимум `name`. Дефолты выставляются на сервере.
+
+### `PUT /api/profiles/:slug`
+Merge-patch. Слаг не меняется. `ownerId` нормализуется (`@username` → `{kind:"username", value:"username"}`).
+
+### `DELETE /api/profiles/:slug`
+Стопает runtime + удаляет всю папку профиля.
+
+### Lifecycle
+
+| Метод | Путь | Что делает |
+|-------|------|-----------|
+| `POST` | `/api/profiles/:slug/start` | Запустить runtime |
+| `POST` | `/api/profiles/:slug/stop` | Остановить |
+| `POST` | `/api/profiles/:slug/apply` | Сохранить конфиг + рестарт (read новый cfg, новый Runtime) |
+| `POST` | `/api/profiles/:slug/pause` | Только если уже running |
+| `POST` | `/api/profiles/:slug/resume` | Только если paused |
+
+Под капотом — `bus` (`src/webui/runtime-bus.ts`).
+
+### `POST /api/profiles/:slug/command`
+
+Те же команды, что в headless / CLI:
+
+```json
+{ "command": "status" }
+{ "command": "stage", "args": ["convinced"] }
+{ "command": "model", "args": ["openai", "gpt-4o"] }
+```
+
+Ответ: `{ "ok": true, "text": "..." }`.
+
+Команды: `status, model, reset, stage, wake, debug, why, amnesia, sticker, pause, resume`. См. [Headless protocol](/docs/developers/headless-protocol#команды-stdin) — там же описание аргументов.
+
+### `GET /api/profiles/:slug/relationship`
+
+```json
+{ "stage": { "id": "convinced", "num": 4, "label": "согласилась общаться" },
+  "score": { "interest": 51, "trust": 33, "attraction": 42, "annoyance": 14, "cringe": 10 } }
+```
+
+## Memory & logs
+
+### Memory list
+
+```
+GET /api/profiles/:slug/memory
+→ { "files": [ { "path": "memory/long-term.md", "size": 1234, "mtime": 1715865000000 }, ... ] }
+```
+
+Включает: `persona.md, speech.md, boundaries.md, communication.md, long-term.md, memory/long-term.md, memory/facts.md, memory/uncertain.md, relationship/timeline.md, time/open-loops.md, time/promises.md, memory/daily/*, memory/episodes/*, memory/palace/<wing>/<hall>/<room>/*`.
+
+### Memory read/write
+
+```
+GET /api/profiles/:slug/memory/file?path=<path>
+PUT /api/profiles/:slug/memory/file   { "path": "...", "content": "..." }
+```
+
+Запись ограничена whitelist'ом (`isAllowedMemoryPath`). `relationship.md` — readonly через UI.
+
+### Logs (raw daily session)
+
+```
+GET /api/profiles/:slug/logs/days        → { "days": ["2026-05-15", "2026-05-16"] }
+GET /api/profiles/:slug/logs/file?day=2026-05-16  → { "day": "...", "content": "..." }
+GET /api/profiles/:slug/logs/buffer      → { "events": [...] }   # in-memory ringbuffer последних событий
+```
+
+### Daily summaries
+
+```
+GET /api/profiles/:slug/memory/daily-list  → { "days": [...] }
+GET /api/profiles/:slug/memory/daily?day=YYYY-MM-DD
+```
+
+## LLM / Persona
+
+### `POST /api/profiles/:slug/llm-update`
+
+```json
+{ "presetId": "openai", "model": "gpt-4o", "apiKey": "sk-..." }
+```
+
+Применяет partial-update к `cfg.llm` через `applyLLMUpdate`. Возвращает `{ changed: ["presetId","model","apiKey"], description: "OpenAI · gpt-4o" }`.
+
+### `POST /api/profiles/:slug/test-llm`
+
+```json
+{ "ok": true, "reply": "ok" }
+{ "ok": false, "error": "LLMAuthError: ..." }
+```
+
+Делает короткий ping-запрос к текущему `cfg.llm`.
+
+### `POST /api/profiles/:slug/generate-persona`
+
+```json
+{ "name": "Алиса", "age": 19, "nationality": "RU", "notes": "..." }
+```
+
+Запускает `generatePersonaPack(llm, slug, ...)` — пишет `persona.md`, `speech.md`, `communication.md`, `stickers.md`, заполняет `cfg.busySchedule`.
+
+### `GET /api/presets/llm-detect?id=<presetId>`
+
+Утилитарно: вернёт preset, если такой есть в `LLM_PRESETS`.
+
+## Пресеты
+
+```
+GET /api/presets/llm                                  # все LLM-пресеты с моделями
+GET /api/presets/llm/:id                               # конкретный
+GET /api/presets/stages                                # 9 стадий с defaults
+GET /api/presets/communication                         # 5 коммуникационных пресетов
+GET /api/presets/timezones?q=<query>                   # IANA таймзоны
+GET /api/presets/names?nationality=RU&count=12         # рандомные имена
+```
+
+## Аддоны
+
+```
+GET    /api/addons                          # registry + installed
+GET    /api/addons/installed
+POST   /api/addons/:id/install              { profileSlug? }
+POST   /api/addons/install-file             { gaaBase64, profileSlug? }
+POST   /api/addons/install-url              { url, profileSlug? }
+DELETE /api/addons/:id
+PUT    /api/addons/:id/toggle               { enabled: true }
+PUT    /api/addons/:id/settings             { values: { foo: "bar" } }
+GET    /api/addons/:id/readme               → { readme: "..." }
+GET    /api/addons/:id/files                → { files: ["files/persona.md", ...] }
+```
+
+## Telegram auth (только userbot)
+
+```
+POST /api/tg/userbot/send-code        { phone, useRemote?, apiId?, apiHash? }
+POST /api/tg/userbot/verify-code      { loginToken|sessionId, code }
+POST /api/tg/userbot/verify-password  { loginToken|sessionId, password }
+```
+
+Под капотом два потока — remote-proxy (без своих api_id) и self-login (со своими). Подробно — в [Telegram-адаптеры](/docs/developers/telegram-adapters#логин-flow-userbot).
+
+## Auth-эндпоинты
+
+```
+GET  /api/auth/status                 → { "enabled": true }
+POST /api/auth/login   { password }   → 200 + Set-Cookie:girl_agent_auth=...
+POST /api/auth/logout                 → 200 + Clear-Cookie
+```
+
+## Errors
+
+```http
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{ "error": "name required" }
+```
+
+```http
+HTTP/1.1 404 Not Found
+{ "error": "profile not found" }
+```
+
+```http
+HTTP/1.1 409 Conflict
+{ "error": "profile already exists: alice" }
+```
+
+```http
+HTTP/1.1 500 Internal Server Error
+{ "error": "internal" }
+```
+
+## CORS
+
+По умолчанию CORS не включён (WebUI один-домен с UI). Если нужно — пропатчите `src/webui/http.ts` (добавьте `Access-Control-*` хедеры). На прод-окружении лучше прокинуть через nginx.
+
+## Rate limit
+
+Нет встроенного. WebUI рассчитан на single-user / single-machine использование. Если выставляете публично — ставьте reverse-proxy с rate-limit (nginx, traefik, cloudflare).
